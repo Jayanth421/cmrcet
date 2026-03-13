@@ -67,6 +67,7 @@ pm2 logs cmr-backend
   }
 ]
 ```
+Note (local dev): include `http://localhost:5173` and/or `http://localhost:5000` in `AllowedOrigins`, or set `S3_UPLOAD_MODE=proxy` on the backend to upload via the backend API (avoids browser S3 CORS).
 4. Keep bucket private and use signed URLs from backend.
 
 ## 7. Configure IAM Access

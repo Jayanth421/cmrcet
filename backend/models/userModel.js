@@ -174,7 +174,8 @@ async function updateStudentSetup(userId, data) {
         branch: data.branch,
         section: data.section,
         mobile: data.mobile,
-        profilePhoto: data.profilePhoto
+        profilePhoto: data.profilePhoto || null,
+        classId: data.classId || null
       }
     }
   );

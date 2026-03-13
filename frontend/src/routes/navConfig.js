@@ -3,13 +3,12 @@ export const navByRole = {
     { label: "Dashboard", href: "/student/home" },
     { label: "Upload", href: "/student/upload" },
     { label: "My Presentations", href: "/student/presentations" },
-    { label: "Subjects", href: "/student/subjects" },
-    { label: "Notifications", href: "/student/notifications" },
-    { label: "Activity", href: "/student/activity" },
+    { label: "My Subjects", href: "/student/subjects" },
     { label: "Profile", href: "/student/profile" }
   ],
   FACULTY: [
     { label: "Dashboard", href: "/faculty/dashboard" },
+    { label: "Classes", href: "/faculty/classes" },
     { label: "Subjects", href: "/faculty/subjects" },
     { label: "Review", href: "/faculty/review" },
     { label: "Materials", href: "/faculty/materials" },
@@ -20,7 +19,6 @@ export const navByRole = {
   ],
   ADMIN: [
     { label: "Dashboard", href: "/admin/dashboard" },
-    { label: "Feature Map", href: "/admin/features" },
     { label: "Departments", href: "/admin/departments" },
     { label: "Classes", href: "/admin/classes" },
     { label: "Subjects", href: "/admin/subjects" },
@@ -28,6 +26,7 @@ export const navByRole = {
     { label: "Uploads", href: "/admin/uploads" },
     { label: "Presentations", href: "/smartboard/view" },
     { label: "Analytics", href: "/admin/analytics" },
+    { label: "Feature Matrix", href: "/admin/feature-matrix" },
     { label: "Settings", href: "/admin/settings" }
   ],
   SMARTBOARD: [{ label: "Presentations", href: "/smartboard/view" }]

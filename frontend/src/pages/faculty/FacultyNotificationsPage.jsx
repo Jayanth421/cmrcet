@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 function uniqueClasses(subjects) {
@@ -91,7 +92,7 @@ export default function FacultyNotificationsPage() {
     }
   };
 
-  if (loading) return <p className="text-soft">Loading notifications...</p>;
+  if (loading) return <PageLoader label="Loading notifications..." />;
 
   return (
     <section className="space-y-5">

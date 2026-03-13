@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import AuthShell from "../components/AuthShell";
 import useAuth from "../hooks/useAuth";
@@ -11,43 +11,10 @@ function getRoleLandingPath(role) {
   return "/login";
 }
 
-const YEAR_OPTIONS = [
-  { value: "1", label: "1st Year" },
-  { value: "2", label: "2nd Year" },
-  { value: "3", label: "3rd Year" },
-  { value: "4", label: "4th Year" }
-];
-
-const DEPARTMENT_OPTIONS = [
-  { value: "ECE", label: "ECE" },
-  { value: "CSE", label: "CSE" },
-  { value: "CSM", label: "CSM" },
-  { value: "MEC", label: "MEC" }
-];
-
-const SECTION_OPTIONS_BY_DEPARTMENT = {
-  ECE: [
-    { value: "ECE-A", label: "ECE-A" },
-    { value: "ECE-B", label: "ECE-B" }
-  ],
-  CSE: [
-    { value: "CSE-A", label: "CSE-A" },
-    { value: "CSE-B", label: "CSE-B" }
-  ],
-  CSM: [
-    { value: "CSM-A", label: "CSM-A" },
-    { value: "CSM-B", label: "CSM-B" }
-  ],
-  MEC: [
-    { value: "MEC-A", label: "MEC-A" },
-    { value: "MEC-B", label: "MEC-B" }
-  ]
-};
-
 export default function StudentSetupPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { completeStudentSetup, login } = useAuth();
+  const { completeStudentSetup, getStudentSetupOptions, login } = useAuth();
   const autoLogin = location.state?.autoLogin || null;
   const [form, setForm] = useState({
     email: location.state?.email || "",
@@ -59,33 +26,97 @@ export default function StudentSetupPage() {
     section: "",
     profilePhoto: ""
   });
+  const [departments, setDepartments] = useState([]);
+  const [classes, setClasses] = useState([]);
+  const [loadingOptions, setLoadingOptions] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const fieldClass =
-    "w-full rounded-xl border border-white/15 bg-[#0f1734] px-4 py-3 text-sm text-white outline-none placeholder:text-slate-400 transition focus:border-brand-300";
+    "w-full rounded-xl border border-white/15 bg-[#141414] px-4 py-3 text-sm text-white outline-none placeholder:text-slate-400 transition focus:border-brand-300";
   const labelClass = "mb-2 block text-xs uppercase tracking-[0.12em] text-slate-300";
-  const sectionOptions = useMemo(
-    () => SECTION_OPTIONS_BY_DEPARTMENT[form.department] || [],
-    [form.department]
-  );
+  const setupInitials = (() => {
+    const cleanName = String(form.name || "").trim();
+    if (cleanName) {
+      return (
+        cleanName
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((part) => part[0]?.toUpperCase() || "")
+          .join("") || "ST"
+      );
+    }
+
+    const emailPrefix = String(form.email || "").split("@")[0] || "";
+    const trimmedPrefix = emailPrefix.replace(/[^a-zA-Z0-9]/g, "").trim();
+    return (trimmedPrefix.slice(0, 2).toUpperCase() || "ST").trim();
+  })();
+
+  const availableYears = useMemo(() => {
+    const unique = new Set(
+      classes
+        .map((item) => Number(item.year))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    );
+    return Array.from(unique).sort((a, b) => a - b);
+  }, [classes]);
+
+  const availableSections = useMemo(() => {
+    const yearNum = Number(form.year);
+    if (!Number.isInteger(yearNum)) return [];
+    const unique = new Set(
+      classes
+        .filter((item) => Number(item.year) === yearNum)
+        .map((item) => String(item.section || "").trim().toUpperCase())
+        .filter(Boolean)
+    );
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [classes, form.year]);
+
+  const loadOptions = async (departmentCode = "") => {
+    setLoadingOptions(true);
+    setError("");
+    try {
+      const response = await getStudentSetupOptions({
+        departmentCode: departmentCode || undefined
+      });
+      setDepartments(response.departments || []);
+      setClasses(response.classes || []);
+    } catch (requestError) {
+      setError(requestError?.response?.data?.message || "Failed to load setup options");
+      setDepartments([]);
+      setClasses([]);
+    } finally {
+      setLoadingOptions(false);
+    }
+  };
 
   const handleChange = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleDepartmentChange = (value) => {
-    setForm((prev) => {
-      const nextSections = SECTION_OPTIONS_BY_DEPARTMENT[value] || [];
-      const sectionStillValid = nextSections.some((item) => item.value === prev.section);
-      return {
-        ...prev,
-        department: value,
-        section: sectionStillValid ? prev.section : ""
-      };
-    });
+    setForm((prev) => ({
+      ...prev,
+      department: value,
+      year: "",
+      section: ""
+    }));
   };
+
+  useEffect(() => {
+    loadOptions();
+  }, []);
+
+  useEffect(() => {
+    if (!form.department) {
+      setClasses([]);
+      return;
+    }
+    loadOptions(form.department);
+  }, [form.department]);
 
   const handlePhotoChange = (event) => {
     const file = event.target.files?.[0];
@@ -128,7 +159,7 @@ export default function StudentSetupPage() {
         rollNumber: form.rollNumber.trim().toUpperCase(),
         name: form.name.trim(),
         mobile: form.mobile.replace(/\D/g, ""),
-        year: Number(form.year),
+        year: form.year ? Number(form.year) : null,
         branch: form.department,
         section: form.section,
         profilePhoto: form.profilePhoto
@@ -159,11 +190,13 @@ export default function StudentSetupPage() {
       helperText="Already completed setup?"
       helperLinkLabel="Sign In."
       helperLinkTo="/login"
+      loading={submitting}
+      loadingLabel="Saving profile..."
     >
       <form className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2" onSubmit={handleSubmit}>
         <div className="lg:col-span-2">
           <label className={labelClass} htmlFor="setup-photo">
-            Profile Photo
+            Profile Photo (Optional)
           </label>
           <input
             id="setup-photo"
@@ -171,7 +204,6 @@ export default function StudentSetupPage() {
             type="file"
             accept="image/*"
             onChange={handlePhotoChange}
-            required
           />
           {form.profilePhoto ? (
             <img
@@ -179,7 +211,11 @@ export default function StudentSetupPage() {
               alt="Profile preview"
               className="mt-3 h-20 w-20 rounded-full border border-white/20 object-cover"
             />
-          ) : null}
+          ) : (
+            <div className="mt-3 flex h-20 w-20 items-center justify-center rounded-full border border-white/20 bg-white/10 text-lg font-semibold text-white">
+              {setupInitials}
+            </div>
+          )}
         </div>
 
         <div className="lg:col-span-2">
@@ -245,26 +281,6 @@ export default function StudentSetupPage() {
         </div>
 
         <div>
-          <label className={labelClass} htmlFor="setup-year">
-            Year
-          </label>
-          <select
-            id="setup-year"
-            className={fieldClass}
-            value={form.year}
-            onChange={(event) => handleChange("year", event.target.value)}
-            required
-          >
-            <option value="">Select Year...</option>
-            {YEAR_OPTIONS.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
           <label className={labelClass} htmlFor="setup-department">
             Department
           </label>
@@ -273,16 +289,42 @@ export default function StudentSetupPage() {
             className={fieldClass}
             value={form.department}
             onChange={(event) => handleDepartmentChange(event.target.value)}
+            disabled={loadingOptions}
             required
           >
-            <option value="">Select Branch...</option>
-            {DEPARTMENT_OPTIONS.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
+            <option value="">{loadingOptions ? "Loading departments..." : "Select Department..."}</option>
+            {departments.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.code} - {item.name}
               </option>
             ))}
           </select>
         </div>
+        <div>
+          <label className={labelClass} htmlFor="setup-year">
+            Year
+          </label>
+          <select
+            id="setup-year"
+            className={fieldClass}
+            value={form.year}
+            onChange={(event) =>
+              setForm((prev) => ({ ...prev, year: event.target.value, section: "" }))
+            }
+            disabled={!form.department || loadingOptions}
+            required
+          >
+            <option value="">
+              {loadingOptions ? "Loading years..." : form.department ? "Select Year..." : "Select department first"}
+            </option>
+            {availableYears.map((yearValue) => (
+              <option key={yearValue} value={String(yearValue)}>
+                {`${yearValue}${yearValue === 1 ? "st" : yearValue === 2 ? "nd" : yearValue === 3 ? "rd" : "th"} Year`}
+              </option>
+            ))}
+          </select>
+        </div>
+
 
         <div>
           <label className={labelClass} htmlFor="setup-section">
@@ -293,13 +335,19 @@ export default function StudentSetupPage() {
             className={fieldClass}
             value={form.section}
             onChange={(event) => handleChange("section", event.target.value)}
-            disabled={!form.department}
+            disabled={!form.department || !form.year || loadingOptions}
             required
           >
-            <option value="">{form.department ? "Select Section..." : "Select branch first"}</option>
-            {sectionOptions.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
+            <option value="">
+              {loadingOptions
+                ? "Loading sections..."
+                : form.department && form.year
+                  ? "Select Section..."
+                  : "Select department and year first"}
+            </option>
+            {availableSections.map((section) => (
+              <option key={section} value={section}>
+                {section}
               </option>
             ))}
           </select>
@@ -309,7 +357,7 @@ export default function StudentSetupPage() {
         {message ? <p className="text-sm text-emerald-300 lg:col-span-2">{message}</p> : null}
 
         <button
-          className="lg:col-span-2 rounded-xl bg-[#3f66ff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#4e74ff] disabled:opacity-70"
+          className="lg:col-span-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-black disabled:opacity-70"
           type="submit"
           disabled={submitting}
         >

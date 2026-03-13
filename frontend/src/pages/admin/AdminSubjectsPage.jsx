@@ -14,6 +14,11 @@ export default function AdminSubjectsPage() {
     code: "",
     facultyId: ""
   });
+  const [bulkSubjectForm, setBulkSubjectForm] = useState({
+    classId: "",
+    facultyId: "",
+    subjectLines: ""
+  });
 
   const [editingSubjectId, setEditingSubjectId] = useState("");
   const [editSubjectForm, setEditSubjectForm] = useState({
@@ -25,6 +30,7 @@ export default function AdminSubjectsPage() {
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [bulkSaving, setBulkSaving] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -66,6 +72,42 @@ export default function AdminSubjectsPage() {
       loadData();
     } catch (requestError) {
       setError(requestError?.response?.data?.message || "Failed to create subject");
+    }
+  };
+
+  const handleCreateSubjectsBulk = async (event) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    setBulkSaving(true);
+    try {
+      const subjects = String(bulkSubjectForm.subjectLines || "")
+        .split(/\r?\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((name) => ({ name }));
+
+      if (!bulkSubjectForm.classId || subjects.length === 0) {
+        throw new Error("Select class and add at least one subject");
+      }
+
+      const response = await api.post("/admin/subjects/bulk", {
+        classId: bulkSubjectForm.classId,
+        facultyId: bulkSubjectForm.facultyId || null,
+        subjects
+      });
+
+      setMessage(
+        `Bulk subjects completed: created ${response.data?.createdCount || 0}, updated ${
+          response.data?.updatedCount || 0
+        }, skipped ${response.data?.skippedCount || 0}`
+      );
+      setBulkSubjectForm({ classId: "", facultyId: "", subjectLines: "" });
+      loadData();
+    } catch (requestError) {
+      setError(requestError?.response?.data?.message || requestError.message || "Bulk create failed");
+    } finally {
+      setBulkSaving(false);
     }
   };
 
@@ -165,6 +207,63 @@ export default function AdminSubjectsPage() {
             type="submit"
           >
             Create Subject
+          </button>
+        </form>
+      </GlassCard>
+
+      <GlassCard>
+        <h3 className="font-display text-lg text-white">Bulk Add Subjects (Multi Select)</h3>
+        <p className="mt-1 text-xs text-soft">
+          Add one subject per line or comma separated. Example: Data Structures, DBMS, Operating Systems
+        </p>
+        <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={handleCreateSubjectsBulk}>
+          <select
+            className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300"
+            value={bulkSubjectForm.classId}
+            onChange={(event) =>
+              setBulkSubjectForm((prev) => ({ ...prev, classId: event.target.value }))
+            }
+            required
+          >
+            <option value="">Select Class</option>
+            {classes.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} - Year {item.year} {item.section} ({item.departmentCode})
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300"
+            value={bulkSubjectForm.facultyId}
+            onChange={(event) =>
+              setBulkSubjectForm((prev) => ({ ...prev, facultyId: event.target.value }))
+            }
+          >
+            <option value="">Assign Faculty (Optional)</option>
+            {facultyUsers.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} - {item.email}
+              </option>
+            ))}
+          </select>
+
+          <textarea
+            className="min-h-32 rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none placeholder:text-soft focus:border-brand-300 md:col-span-2"
+            placeholder={"Data Structures\nOperating Systems\nComputer Networks"}
+            value={bulkSubjectForm.subjectLines}
+            onChange={(event) =>
+              setBulkSubjectForm((prev) => ({ ...prev, subjectLines: event.target.value }))
+            }
+            required
+          />
+
+          <button
+            className="rounded-xl bg-gradient-to-r from-violetBrand-500 to-brand-500 px-4 py-3 text-sm font-semibold text-white md:col-span-2"
+            type="submit"
+            disabled={bulkSaving}
+          >
+            {bulkSaving ? "Saving..." : "Create Subjects in Bulk"}
           </button>
         </form>
       </GlassCard>

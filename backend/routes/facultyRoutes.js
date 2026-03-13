@@ -2,6 +2,7 @@ const express = require("express");
 const { ROLES } = require("../config/constants");
 const {
   changeFacultyPassword,
+  completeLectureMaterialUpload,
   createFacultyAnnouncement,
   getFacultyClassesList,
   getFacultyDashboard,
@@ -31,6 +32,7 @@ router.get("/subjects/:subjectId/students", getFacultySubjectStudents);
 router.get("/presentations", getFacultyPresentations);
 router.put("/presentations/:presentationId/review", reviewFacultyPresentation);
 router.post("/materials/presign", requestLectureMaterialUploadUrl);
+router.post("/materials/complete", completeLectureMaterialUpload);
 router.get("/materials", getFacultyLectureMaterials);
 router.get("/students", getFacultyStudents);
 router.get("/notifications", getFacultyNotifications);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 export default function StudentSubjectsPage() {
@@ -29,7 +30,7 @@ export default function StudentSubjectsPage() {
     loadSubjects();
   }, []);
 
-  if (state.loading) return <p className="text-soft">Loading subjects...</p>;
+  if (state.loading) return <PageLoader label="Loading subjects..." />;
 
   const getStatusClass = (status) => {
     if (status === "UPLOADED" || status === "APPROVED") return "bg-emerald-400/20 text-emerald-200";

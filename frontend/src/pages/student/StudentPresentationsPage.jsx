@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -19,6 +20,18 @@ function getContentType(file) {
   }
   if (lowerName.endsWith(".pdf")) return "application/pdf";
   return "application/octet-stream";
+}
+
+function getStorageUploadNetworkHint(uploadUrl) {
+  const url = String(uploadUrl || "");
+  const origin = typeof window !== "undefined" ? String(window.location.origin || "") : "";
+
+  if (/amazonaws\.com/i.test(url)) {
+    const originHint = origin ? `Add ${origin} to your S3 bucket CORS AllowedOrigins (and allow PUT).` : "";
+    return `Storage upload request was blocked (usually S3 CORS). ${originHint} Or set backend S3_UPLOAD_MODE=proxy to upload via the backend API.`;
+  }
+
+  return "Storage upload request failed to reach the server. Check backend URL and network connectivity.";
 }
 
 export default function StudentPresentationsPage() {
@@ -120,16 +133,33 @@ export default function StudentPresentationsPage() {
         }
       );
 
-      const uploadResponse = await fetch(replaceResponse.data.uploadUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": fileType
-        },
-        body: file
-      });
-      if (!uploadResponse.ok) {
-        throw new Error("Storage upload failed");
+      const uploadUrl = replaceResponse.data.uploadUrl;
+      const uploadToken = replaceResponse.data.uploadToken;
+      if (!uploadUrl || !uploadToken) {
+        throw new Error("Upload URL could not be generated. Please try again.");
       }
+
+      let uploadResponse;
+      try {
+        uploadResponse = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": fileType
+          },
+          body: file
+        });
+      } catch (_fetchError) {
+        throw new Error(getStorageUploadNetworkHint(uploadUrl));
+      }
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        const reason = String(errorText || "").trim();
+        throw new Error(reason ? `Storage upload failed: ${reason}` : "Storage upload failed");
+      }
+
+      await api.post(`/student/presentations/${presentation.id}/replace-complete`, {
+        uploadToken
+      });
 
       setMessage("Presentation file replaced successfully.");
       await loadData();
@@ -159,7 +189,7 @@ export default function StudentPresentationsPage() {
     }
   };
 
-  if (loading) return <p className="text-soft">Loading presentations...</p>;
+  if (loading) return <PageLoader label="Loading presentations..." />;
 
   return (
     <section className="space-y-5">

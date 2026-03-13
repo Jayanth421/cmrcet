@@ -1,307 +1,226 @@
-﻿import { useEffect, useState } from "react";
-import GlassCard from "../../components/GlassCard";
+import { useEffect, useRef, useState } from "react";
+import { PoweredByYeahzz } from "../../components/YeahzzBranding";
 import api from "../../services/api";
 
-export default function FacultySmartboardPage() {
-  const [session, setSession] = useState(null);
-  const [sessionToken, setSessionToken] = useState("");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [controlMessage, setControlMessage] = useState("");
-  const [summary, setSummary] = useState([]);
-  const [loadingSummary, setLoadingSummary] = useState(true);
-  const [selectedUploadId, setSelectedUploadId] = useState("");
-  const [isPresentationMode, setIsPresentationMode] = useState(false);
-  const [slideNumber, setSlideNumber] = useState(1);
+const SESSION_TOKEN_REGEX =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
 
-  const loadSummary = async () => {
-    setLoadingSummary(true);
+function extractSessionToken(value) {
+  const input = String(value || "").trim();
+  if (!input) return "";
+
+  try {
+    const url = new URL(input);
+    const tokenFromQuery = String(url.searchParams.get("token") || "").trim();
+    if (SESSION_TOKEN_REGEX.test(tokenFromQuery)) {
+      return tokenFromQuery.match(SESSION_TOKEN_REGEX)?.[0] || "";
+    }
+  } catch (_error) {
+    // Not a URL; continue with plain token extraction.
+  }
+
+  return input.match(SESSION_TOKEN_REGEX)?.[0] || "";
+}
+
+export default function FacultySmartboardPage() {
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerRequested, setScannerRequested] = useState(false);
+  const [scannerError, setScannerError] = useState("");
+  const [authorizingSession, setAuthorizingSession] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const scanTimerRef = useRef(null);
+  const scanInProgressRef = useRef(false);
+
+  const stopScanner = () => {
+    if (scanTimerRef.current) {
+      clearInterval(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
+
+    const stream = streamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  const authorizeSessionToken = async (token) => {
+    const normalized = extractSessionToken(token);
+    if (!normalized) {
+      setScannerError("Invalid QR code. Please scan again.");
+      return;
+    }
+
+    setAuthorizingSession(true);
+    setError("");
+    setMessage("");
+    setScannerError("");
     try {
-      const response = await api.get("/faculty/smartboard/summary");
-      setSummary(response.data.smartboardData || []);
+      await api.post("/auth/smartboard/authorize", { sessionToken: normalized });
+      setMessage("Board login successful. Smartboard session authorized.");
+      setScannerOpen(false);
+      setScannerRequested(false);
+      stopScanner();
     } catch (requestError) {
-      setError(requestError?.response?.data?.message || "Failed to load smartboard summary");
+      const apiMessage = requestError?.response?.data?.message || "Failed to authorize smartboard session";
+      setScannerError(apiMessage);
+      setError(apiMessage);
     } finally {
-      setLoadingSummary(false);
+      setAuthorizingSession(false);
     }
   };
 
   useEffect(() => {
-    loadSummary();
+    if (!scannerOpen || !scannerRequested) {
+      stopScanner();
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const startScanner = async () => {
+      setScannerError("");
+
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setScannerError("Camera is not supported on this device/browser.");
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+
+        if (!("BarcodeDetector" in window)) {
+          setScannerError("QR auto-scan is not supported in this browser. Use a mobile browser with camera QR support.");
+          return;
+        }
+
+        let detector;
+        try {
+          detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+        } catch (_error) {
+          setScannerError("QR scanner is unavailable in this browser. Use a mobile browser with camera QR support.");
+          return;
+        }
+
+        scanTimerRef.current = window.setInterval(async () => {
+          if (!videoRef.current || scanInProgressRef.current) return;
+          scanInProgressRef.current = true;
+          try {
+            const codes = await detector.detect(videoRef.current);
+            if (!codes || !codes.length) return;
+            const rawValue = String(codes[0]?.rawValue || "").trim();
+            const token = extractSessionToken(rawValue);
+            if (token) {
+              await authorizeSessionToken(token);
+            }
+          } catch (_error) {
+            // Keep scanner running; intermittent decode errors are expected.
+          } finally {
+            scanInProgressRef.current = false;
+          }
+        }, 700);
+      } catch (cameraError) {
+        setScannerError(cameraError?.message || "Unable to access camera.");
+      }
+    };
+
+    startScanner();
+
+    return () => {
+      cancelled = true;
+      stopScanner();
+    };
+  }, [scannerOpen, scannerRequested]);
+
+  useEffect(() => {
+    // Safety reset: opening page should never auto-start camera.
+    setScannerOpen(false);
+    setScannerRequested(false);
+    stopScanner();
+
+    return () => {
+      stopScanner();
+    };
   }, []);
 
-  useEffect(() => {
-    if (!selectedUploadId) return;
-    const exists = summary.some((item) => String(item.uploadId || "") === String(selectedUploadId));
-    if (!exists) {
-      setSelectedUploadId("");
-      setIsPresentationMode(false);
-      setSlideNumber(1);
-    }
-  }, [selectedUploadId, summary]);
-
-  const selectableUploads = summary.filter((item) => item.uploadId && item.fileUrl);
-  const selectedUpload = selectableUploads.find(
-    (item) => String(item.uploadId) === String(selectedUploadId)
-  );
-
-  const createSession = async () => {
-    setError("");
-    setMessage("");
-    try {
-      const response = await api.post("/auth/smartboard/session", {
-        smartboardName: "Classroom Smartboard"
-      });
-      setSession(response.data);
-      setSessionToken(response.data.sessionToken);
-    } catch (requestError) {
-      setError(requestError?.response?.data?.message || "Failed to create smartboard session");
-    }
-  };
-
-  const authorizeSession = async () => {
-    setError("");
-    setMessage("");
-    try {
-      await api.post("/auth/smartboard/authorize", { sessionToken });
-      setMessage("Smartboard session authorized successfully.");
-    } catch (requestError) {
-      setError(requestError?.response?.data?.message || "Failed to authorize smartboard session");
-    }
-  };
-
-  const sendToSmartboard = (uploadId) => {
-    setSelectedUploadId(uploadId);
-    setIsPresentationMode(false);
-    setSlideNumber(1);
-    setControlMessage("Presentation sent to smartboard queue.");
-  };
-
-  const startPresentationMode = () => {
-    if (!selectedUpload) {
-      setControlMessage("Select a presentation first.");
-      return;
-    }
-    setIsPresentationMode(true);
-    setSlideNumber(1);
-    setControlMessage("Presentation mode started on smartboard.");
-  };
-
-  const moveSlide = (direction) => {
-    if (!isPresentationMode) {
-      setControlMessage("Start presentation mode before controlling slides.");
-      return;
-    }
-
-    setSlideNumber((prev) => {
-      if (direction === "NEXT") return prev + 1;
-      return Math.max(prev - 1, 1);
-    });
-    setControlMessage(direction === "NEXT" ? "Moved to next slide." : "Moved to previous slide.");
-  };
-
-  const stopPresentationMode = () => {
-    setIsPresentationMode(false);
-    setSlideNumber(1);
-    setControlMessage("Presentation mode stopped.");
-  };
-
   return (
-    <section className="space-y-5">
-      <GlassCard>
-        <h3 className="font-display text-lg text-white">Smartboard Login</h3>
-        <p className="mt-1 text-sm text-soft">
-          Generate QR and authorize board login for assigned classes.
-        </p>
+    <section className="mx-auto flex min-h-[68vh] w-full max-w-3xl items-center justify-center px-2">
+      <div className="w-full max-w-md rounded-3xl border border-white/15 bg-[#141414] p-5 text-center shadow-[0_20px_50px_rgba(20, 20, 20, 0.35)]">
+        <h2 className="font-display text-2xl text-white">Smartboard QR Scanner</h2>
+        <p className="mt-2 text-sm text-slate-300">Open scanner, scan board QR, and login instantly.</p>
+
         <button
           type="button"
-          onClick={createSession}
-          className="mt-4 rounded-xl bg-gradient-to-r from-violetBrand-500 to-brand-500 px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110"
+          onClick={() => {
+            setScannerRequested(true);
+            setScannerOpen(true);
+          }}
+          className="mt-5 w-full rounded-xl border border-black bg-black px-3 py-3 text-sm font-semibold text-white transition hover:bg-gray-900"
         >
-          Generate Smartboard QR
+          Open Scanner
         </button>
-      </GlassCard>
 
-      {session ? (
-        <GlassCard>
-          <h4 className="font-display text-base text-white">Generated Session</h4>
-          <p className="mt-2 break-all text-xs text-soft">{session.sessionToken}</p>
-          <img
-            src={session.qrDataUrl}
-            alt="Smartboard QR"
-            className="mt-4 w-full max-w-xs rounded-2xl border border-white/20"
-          />
-          <button
-            type="button"
-            onClick={authorizeSession}
-            className="mt-4 rounded-xl bg-white/15 px-4 py-2 text-sm text-white transition hover:bg-white/25"
-          >
-            Authorize This Session
-          </button>
-        </GlassCard>
+        {message ? <p className="mt-4 text-sm font-medium text-[#22e300]">{message}</p> : null}
+        {error ? <p className="mt-2 text-sm font-medium text-[#ff0303]">{error}</p> : null}
+
+        <PoweredByYeahzz className="mt-5" />
+      </div>
+
+      {scannerOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-white/20 bg-[#141414] p-4 shadow-[0_20px_50px_rgba(20, 20, 20, 0.4)]">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-lg font-semibold text-white">Scan Smartboard QR</h4>
+              <button
+                type="button"
+                onClick={() => {
+                  setScannerOpen(false);
+                  setScannerRequested(false);
+                }}
+                className="rounded-xl border border-white  bg-black px-3 py-2 text-xs font-semibold text-white transition hover:bg-black"
+              >
+                Close
+              </button>
+            </div>
+
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="mt-3 aspect-square w-full rounded-2xl border border-white/20 bg-black/40 object-cover"
+            />
+
+            <p className="mt-3 text-xs text-slate-300">
+              Point your camera at smartboard QR. It will authorize automatically.
+            </p>
+
+            {authorizingSession ? <p className="mt-3 text-xs text-slate-200">Authorizing...</p> : null}
+            {scannerError ? <p className="mt-3 text-sm text-[#7f1d1d]">{scannerError}</p> : null}
+          </div>
+        </div>
       ) : null}
-
-      <GlassCard>
-        <h4 className="font-display text-base text-white">Smartboard Control</h4>
-        <p className="mt-1 text-sm text-soft">
-          Select a presentation, broadcast to board, control slides, and stop presentation mode.
-        </p>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <select
-            className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-brand-300"
-            value={selectedUploadId}
-            onChange={(event) => setSelectedUploadId(event.target.value)}
-          >
-            <option value="">Select presentation</option>
-            {selectableUploads.map((item) => (
-              <option key={item.uploadId} value={item.uploadId}>
-                {item.subjectName} - {item.title || item.rollNumber || item.category}
-              </option>
-            ))}
-          </select>
-
-          <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-soft">
-            {selectedUpload ? (
-              <>
-                <p className="font-semibold text-white">
-                  {selectedUpload.title || selectedUpload.rollNumber || "Presentation"}
-                </p>
-                <p className="text-xs text-soft">
-                  {selectedUpload.subjectName} | {selectedUpload.category}
-                </p>
-              </>
-            ) : (
-              <p>No presentation selected.</p>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={!selectedUpload}
-            onClick={() => sendToSmartboard(selectedUploadId)}
-            className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/20 disabled:opacity-60"
-          >
-            Send to Smartboard
-          </button>
-          <button
-            type="button"
-            disabled={!selectedUpload}
-            onClick={startPresentationMode}
-            className="rounded-xl bg-gradient-to-r from-violetBrand-500 to-brand-500 px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
-          >
-            Start Presentation Mode
-          </button>
-          <button
-            type="button"
-            disabled={!isPresentationMode}
-            onClick={() => moveSlide("PREV")}
-            className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/20 disabled:opacity-60"
-          >
-            Previous Slide
-          </button>
-          <button
-            type="button"
-            disabled={!isPresentationMode}
-            onClick={() => moveSlide("NEXT")}
-            className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/20 disabled:opacity-60"
-          >
-            Next Slide
-          </button>
-          <button
-            type="button"
-            disabled={!isPresentationMode}
-            onClick={stopPresentationMode}
-            className="rounded-xl border border-red-400/60 bg-red-400/20 px-3 py-2 text-xs font-semibold text-red-100 transition hover:bg-red-400/30 disabled:opacity-60"
-          >
-            Stop Presentation
-          </button>
-        </div>
-
-        <p className="mt-3 text-xs text-soft">
-          Mode: {isPresentationMode ? "ACTIVE" : "IDLE"} | Current Slide: {slideNumber}
-        </p>
-        {controlMessage ? <p className="mt-1 text-xs text-emerald-300">{controlMessage}</p> : null}
-      </GlassCard>
-
-      <GlassCard>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h4 className="font-display text-base text-white">Smartboard Content Summary</h4>
-          <button
-            type="button"
-            onClick={loadSummary}
-            className="rounded-xl bg-white/15 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/25"
-          >
-            Refresh
-          </button>
-        </div>
-
-        {loadingSummary ? <p className="mt-3 text-soft">Loading smartboard summary...</p> : null}
-
-        {!loadingSummary && summary.length === 0 ? (
-          <p className="mt-3 text-soft">No subject uploads available for smartboard yet.</p>
-        ) : null}
-
-        {summary.length > 0 ? (
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-soft">
-                <tr>
-                  <th className="px-3 py-2">Subject</th>
-                  <th className="px-3 py-2">Roll Number</th>
-                  <th className="px-3 py-2">Category</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Uploaded At</th>
-                  <th className="px-3 py-2">Controls</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.map((item) => (
-                  <tr key={`${item.subjectId}-${item.uploadId || "none"}`} className="border-t border-white/10">
-                    <td className="px-3 py-3">{item.subjectName}</td>
-                    <td className="px-3 py-3">{item.rollNumber || "-"}</td>
-                    <td className="px-3 py-3">{item.category || "-"}</td>
-                    <td className="px-3 py-3">{item.status || "-"}</td>
-                    <td className="px-3 py-3">
-                      {item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : "-"}
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex flex-wrap gap-2">
-                        {item.fileUrl ? (
-                          <a
-                            href={item.fileUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded-lg border border-white/20 bg-white/10 px-2 py-1 text-xs text-white hover:bg-white/20"
-                          >
-                            Open
-                          </a>
-                        ) : (
-                          "-"
-                        )}
-                        {item.uploadId ? (
-                          <button
-                            type="button"
-                            onClick={() => sendToSmartboard(item.uploadId)}
-                            className="rounded-lg border border-white/20 bg-white/10 px-2 py-1 text-xs text-white hover:bg-white/20"
-                          >
-                            Send
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </GlassCard>
-
-      {message ? <p className="text-emerald-300">{message}</p> : null}
-      {error ? <p className="text-red-300">{error}</p> : null}
     </section>
   );
 }

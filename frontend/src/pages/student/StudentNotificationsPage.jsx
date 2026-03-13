@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 function getPriorityClass(priority, status) {
@@ -31,7 +32,7 @@ export default function StudentNotificationsPage() {
     loadNotifications();
   }, []);
 
-  if (loading) return <p className="text-soft">Loading notifications...</p>;
+  if (loading) return <PageLoader label="Loading notifications..." />;
 
   return (
     <section className="space-y-5">

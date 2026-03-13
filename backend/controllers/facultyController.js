@@ -7,7 +7,8 @@ const Announcement = require("../mongoModels/Announcement");
 const Subject = require("../mongoModels/Subject");
 const Upload = require("../mongoModels/Upload");
 const User = require("../mongoModels/User");
-const { buildPublicFileUrl, createPresignedUploadUrl } = require("../services/s3Service");
+const { signUploadToken, verifyUploadToken } = require("../config/jwt");
+const { buildFileUrl, buildUploadUrl, doesUploadedFileExist } = require("../services/storageService");
 const { createUpload } = require("../models/uploadModel");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
@@ -32,6 +33,13 @@ function ensureObjectId(value, fieldName) {
 
 function buildOfficeViewerUrl(fileUrl) {
   return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`;
+}
+
+function getRequestOrigin(req) {
+  const proto = String(req.protocol || "http").trim();
+  const host = String(req.get("host") || "").trim();
+  if (!host) return "";
+  return `${proto}://${host}`;
 }
 
 async function ensureFaculty(facultyId) {
@@ -413,8 +421,94 @@ const requestLectureMaterialUploadUrl = asyncHandler(async (req, res) => {
 
   const safeName = sanitizeFileName(fileName);
   const key = `faculty/${String(facultyId)}/${String(subject.code || "subject").toLowerCase()}/${Date.now()}-${safeName}`;
-  const uploadUrl = await createPresignedUploadUrl({ key, contentType: fileType });
-  const fileUrl = buildPublicFileUrl(key);
+  const sanitizedFileName = sanitizeText(fileName, 240);
+  const sanitizedFileType = sanitizeText(fileType, 120);
+
+  const uploadToken = signUploadToken({
+    purpose: "faculty_material_upload",
+    userId: facultyId,
+    subjectId: normalizedSubjectId,
+    key,
+    fileName: sanitizedFileName,
+    fileType: sanitizedFileType
+  });
+
+  const origin = getRequestOrigin(req);
+  const uploadUrl = await buildUploadUrl({
+    origin,
+    key,
+    contentType: sanitizedFileType || fileType,
+    uploadToken
+  });
+  const fileUrl = buildFileUrl({ origin, key });
+
+  res.status(201).json({
+    message: "Lecture material upload URL generated",
+    uploadUrl,
+    fileUrl,
+    officeViewerUrl: buildOfficeViewerUrl(fileUrl),
+    uploadToken
+  });
+});
+
+const completeLectureMaterialUpload = asyncHandler(async (req, res) => {
+  const facultyId = req.user.userId;
+  const { uploadToken, title = "", description = "" } = req.body;
+  if (!uploadToken) throw new ApiError(400, "uploadToken is required");
+
+  let decoded;
+  try {
+    decoded = verifyUploadToken(String(uploadToken));
+  } catch (_error) {
+    throw new ApiError(400, "uploadToken is invalid or expired");
+  }
+
+  if (decoded.purpose !== "faculty_material_upload") {
+    throw new ApiError(400, "uploadToken is invalid");
+  }
+
+  if (String(decoded.userId || "") !== String(facultyId)) {
+    throw new ApiError(403, "Invalid upload token");
+  }
+
+  const normalizedSubjectId = ensureObjectId(decoded.subjectId, "subjectId");
+  const subject = await Subject.findOne({ _id: normalizedSubjectId, facultyId }).lean().exec();
+  if (!subject) throw new ApiError(403, "Subject is not assigned to you");
+
+  const key = String(decoded.key || "").trim();
+  if (!key) throw new ApiError(400, "uploadToken is invalid");
+
+  let exists = false;
+  try {
+    exists = await doesUploadedFileExist({ key });
+  } catch (_error) {
+    throw new ApiError(500, "Failed to verify uploaded file in storage");
+  }
+
+  if (!exists) {
+    throw new ApiError(400, "Storage upload not found. Please retry uploading the file.");
+  }
+
+  const alreadyCompleted = await Upload.findOne({
+    uploadedBy: facultyId,
+    s3Key: key,
+    category: "LECTURE_MATERIAL"
+  })
+    .select("_id fileUrl")
+    .lean()
+    .exec();
+
+  const origin = getRequestOrigin(req);
+  const fileUrl = alreadyCompleted?.fileUrl || buildFileUrl({ origin, key });
+
+  if (alreadyCompleted?._id) {
+    return res.status(200).json({
+      message: "Upload already completed",
+      uploadId: String(alreadyCompleted._id),
+      fileUrl,
+      officeViewerUrl: buildOfficeViewerUrl(fileUrl)
+    });
+  }
 
   const created = await createUpload({
     uploadedBy: facultyId,
@@ -424,15 +518,14 @@ const requestLectureMaterialUploadUrl = asyncHandler(async (req, res) => {
     status: "UPLOADED",
     title: sanitizeText(title, 140),
     description: sanitizeText(description, 1200),
-    fileName: sanitizeText(fileName, 240),
-    fileType: sanitizeText(fileType, 120),
+    fileName: sanitizeText(decoded.fileName, 240),
+    fileType: sanitizeText(decoded.fileType, 120),
     category: "LECTURE_MATERIAL"
   });
 
   res.status(201).json({
-    message: "Lecture material upload URL generated",
+    message: "Lecture material uploaded successfully",
     uploadId: created.insertId,
-    uploadUrl,
     fileUrl,
     officeViewerUrl: buildOfficeViewerUrl(fileUrl)
   });
@@ -809,6 +902,7 @@ const getSmartboardSummary = asyncHandler(async (req, res) => {
 
 module.exports = {
   changeFacultyPassword,
+  completeLectureMaterialUpload,
   createFacultyAnnouncement,
   getFacultyClassesList,
   getFacultyDashboard,

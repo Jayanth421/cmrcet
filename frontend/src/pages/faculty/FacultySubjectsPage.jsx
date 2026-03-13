@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 export default function FacultySubjectsPage() {
@@ -51,7 +52,7 @@ export default function FacultySubjectsPage() {
     loadSubjectStudents();
   }, [selectedSubjectId]);
 
-  if (loading) return <p className="text-soft">Loading subject management...</p>;
+  if (loading) return <PageLoader label="Loading subject management..." />;
 
   return (
     <section className="space-y-5">

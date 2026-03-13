@@ -1,4 +1,5 @@
 const bcrypt = require("bcrypt");
+const archiver = require("archiver");
 const XLSX = require("xlsx");
 const { Types } = require("mongoose");
 const { ROLES } = require("../config/constants");
@@ -307,6 +308,23 @@ function mapSpreadsheetRowToUserPayload(rawRow = {}) {
     profilePhoto: getImportFieldValue(row, ["profilephoto", "photo", "avatar"]),
     classId: getImportFieldValue(row, ["classid"]),
     classIds: getImportFieldValue(row, ["classids", "facultyclassids"]),
+    className: getImportFieldValue(row, ["classname", "class"]),
+    classDepartmentCode: getImportFieldValue(row, [
+      "classdepartmentcode",
+      "classdeptcode",
+      "departmentcode",
+      "deptcode",
+      "classbranch"
+    ]),
+    classYear: getImportFieldValue(row, ["classyear", "yearforclass"]),
+    classSection: getImportFieldValue(row, ["classsection", "sectionforclass"]),
+    facultyClassAssignments: getImportFieldValue(row, [
+      "facultyclassassignments",
+      "classassignments",
+      "facultyclasses",
+      "classselectors",
+      "classcodes"
+    ]),
     isVerified: getImportFieldValue(row, ["isverified", "verified"])
   };
 }
@@ -336,6 +354,94 @@ function extractRowsFromSpreadsheetBuffer(buffer) {
   }
 
   return rows;
+}
+
+function sanitizePathSegment(value, fallback = "unknown") {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, "_");
+  return normalized || fallback;
+}
+
+function sanitizeZipFileName(value, fallback = "file") {
+  const normalized = sanitizePathSegment(value, fallback);
+  return normalized.slice(0, 120);
+}
+
+function normalizeYearValue(value) {
+  const yearNum = Number(value);
+  if (!Number.isInteger(yearNum) || yearNum < 1 || yearNum > 10) {
+    throw new ApiError(400, "Year must be an integer between 1 and 10");
+  }
+  return yearNum;
+}
+
+function normalizeExcelString(value) {
+  return String(value || "").trim();
+}
+
+function normalizeDepartmentCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function parseClassAssignmentTokens(value) {
+  return String(value || "")
+    .split(/[,\n;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseClassDescriptorToken(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+
+  const compact = normalized.replace(/\s+/g, "");
+  const match = compact.match(
+    /^([A-Za-z0-9]+)[\-_:|\/]([0-9]{1,2})[\-_:|\/]([A-Za-z0-9-]+)$/
+  );
+  if (!match) return null;
+
+  return {
+    departmentCode: normalizeDepartmentCode(match[1]),
+    year: Number(match[2]),
+    section: normalizeSection(match[3]),
+    className: ""
+  };
+}
+
+function deriveSubjectCode(subjectName, usedCodes = new Set()) {
+  const base = String(subjectName || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 10) || "SUBJECT";
+
+  let candidate = base;
+  let counter = 1;
+  while (usedCodes.has(candidate)) {
+    const suffix = String(counter).padStart(2, "0");
+    candidate = `${base.slice(0, Math.max(1, 10 - suffix.length))}${suffix}`;
+    counter += 1;
+  }
+  usedCodes.add(candidate);
+  return candidate;
+}
+
+function sendWorkbook(res, fileName, sheetName, rows) {
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  );
+  res.setHeader("Content-Disposition", `attachment; filename=\"${fileName}\"`);
+  res.status(200).send(buffer);
 }
 
 const createDepartment = asyncHandler(async (req, res) => {
@@ -536,6 +642,84 @@ const createSubject = asyncHandler(async (req, res) => {
   }
 });
 
+const createSubjectsBulk = asyncHandler(async (req, res) => {
+  const { classId, facultyId = null, subjects = [] } = req.body;
+  if (!classId) throw new ApiError(400, "classId is required");
+  if (!Types.ObjectId.isValid(classId)) throw new ApiError(400, "classId is invalid");
+  if (facultyId && !Types.ObjectId.isValid(facultyId)) {
+    throw new ApiError(400, "facultyId is invalid");
+  }
+  if (!Array.isArray(subjects) || subjects.length === 0) {
+    throw new ApiError(400, "subjects must be a non-empty array");
+  }
+
+  const classDoc = await Class.findById(classId).select("_id").lean().exec();
+  if (!classDoc) throw new ApiError(404, "Class not found");
+
+  const existingSubjects = await Subject.find({ classId }).select("name code").lean().exec();
+  const usedCodes = new Set(existingSubjects.map((item) => String(item.code || "").toUpperCase()));
+
+  let createdCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+  const rows = [];
+
+  for (const input of subjects) {
+    const normalizedName =
+      typeof input === "string" ? String(input).trim() : String(input?.name || "").trim();
+    if (!normalizedName) {
+      skippedCount += 1;
+      continue;
+    }
+
+    const requestedCode =
+      typeof input === "string" ? "" : String(input?.code || "").trim().toUpperCase();
+    const resolvedCode = requestedCode || deriveSubjectCode(normalizedName, usedCodes);
+    if (!requestedCode) usedCodes.add(resolvedCode);
+
+    const existing = await Subject.findOne({ classId, code: resolvedCode }).select("_id name").exec();
+    if (existing) {
+      const patch = {};
+      if (existing.name !== normalizedName) patch.name = normalizedName;
+      if (facultyId !== null && facultyId !== undefined) patch.facultyId = facultyId || null;
+
+      if (Object.keys(patch).length > 0) {
+        await Subject.updateOne({ _id: existing._id }, { $set: patch });
+        updatedCount += 1;
+      } else {
+        skippedCount += 1;
+      }
+      rows.push({
+        id: String(existing._id),
+        name: normalizedName,
+        code: resolvedCode
+      });
+      continue;
+    }
+
+    const created = await Subject.create({
+      classId,
+      facultyId: facultyId || null,
+      name: normalizedName,
+      code: resolvedCode
+    });
+    createdCount += 1;
+    rows.push({
+      id: String(created._id),
+      name: created.name,
+      code: created.code
+    });
+  }
+
+  res.status(200).json({
+    message: "Bulk subject operation completed",
+    createdCount,
+    updatedCount,
+    skippedCount,
+    subjects: rows
+  });
+});
+
 const updateSubject = asyncHandler(async (req, res) => {
   const { subjectId } = req.params;
   if (!Types.ObjectId.isValid(subjectId)) {
@@ -677,6 +861,70 @@ const bulkImportUsersByAdmin = asyncHandler(async (req, res) => {
   const createdUsers = [];
   const failed = [];
   let skippedCount = 0;
+  const departmentCache = new Map();
+  const classCache = new Map();
+
+  async function getOrCreateDepartmentByCode(departmentCode, departmentName = "") {
+    const normalizedCode = normalizeDepartmentCode(departmentCode);
+    if (!normalizedCode) throw new ApiError(400, "DepartmentCode is required for class mapping");
+    if (departmentCache.has(normalizedCode)) return departmentCache.get(normalizedCode);
+
+    const normalizedName = normalizeExcelString(departmentName) || normalizedCode;
+    let department = await Department.findOne({ code: normalizedCode }).exec();
+    if (!department) {
+      department = await Department.create({
+        code: normalizedCode,
+        name: normalizedName
+      });
+    } else if (normalizedName && department.name !== normalizedName) {
+      department.name = normalizedName;
+      await department.save();
+    }
+
+    departmentCache.set(normalizedCode, department);
+    return department;
+  }
+
+  async function getOrCreateClassByDescriptor(descriptor = {}) {
+    const departmentCode = normalizeDepartmentCode(descriptor.departmentCode);
+    const section = normalizeSection(descriptor.section);
+    if (!departmentCode || !section || descriptor.year === undefined || descriptor.year === null) {
+      return null;
+    }
+
+    const year = normalizeYearValue(descriptor.year);
+    const department = await getOrCreateDepartmentByCode(
+      departmentCode,
+      descriptor.departmentName || descriptor.departmentCode
+    );
+
+    const cacheKey = `${departmentCode}:${year}:${section}`;
+    if (classCache.has(cacheKey)) return classCache.get(cacheKey);
+
+    let classDoc = await Class.findOne({
+      departmentId: department._id,
+      year,
+      section
+    }).exec();
+
+    const requestedClassName = normalizeExcelString(descriptor.className);
+    const fallbackClassName = `${departmentCode}-${year}-${section}`;
+
+    if (!classDoc) {
+      classDoc = await Class.create({
+        departmentId: department._id,
+        year,
+        section,
+        name: requestedClassName || fallbackClassName
+      });
+    } else if (requestedClassName && classDoc.name !== requestedClassName) {
+      classDoc.name = requestedClassName;
+      await classDoc.save();
+    }
+
+    classCache.set(cacheKey, classDoc);
+    return classDoc;
+  }
 
   for (let index = 0; index < rows.length; index += 1) {
     const rawRow = rows[index];
@@ -689,6 +937,74 @@ const bulkImportUsersByAdmin = asyncHandler(async (req, res) => {
 
     const payload = mapSpreadsheetRowToUserPayload(rawRow);
     try {
+      const normalizedRole = normalizeRole(payload.role);
+      const directClassIdRaw = normalizeExcelString(payload.classId);
+
+      const defaultClassDescriptor = {
+        departmentCode: normalizeDepartmentCode(payload.classDepartmentCode || payload.branch),
+        departmentName: payload.classDepartmentCode || payload.branch,
+        year:
+          payload.classYear !== undefined && payload.classYear !== null && payload.classYear !== ""
+            ? payload.classYear
+            : payload.year,
+        section: payload.classSection || payload.section,
+        className: payload.className
+      };
+
+      if (directClassIdRaw) {
+        if (Types.ObjectId.isValid(directClassIdRaw)) {
+          payload.classId = directClassIdRaw;
+        } else {
+          const fromDescriptor = parseClassDescriptorToken(directClassIdRaw);
+          if (!fromDescriptor) {
+            throw new ApiError(
+              400,
+              "classId must be a valid id or DEPT-YEAR-SECTION descriptor (e.g., CSE-2-A)"
+            );
+          }
+          const classDoc = await getOrCreateClassByDescriptor({
+            ...fromDescriptor,
+            className: defaultClassDescriptor.className
+          });
+          payload.classId = classDoc ? String(classDoc._id) : null;
+        }
+      } else {
+        const classDoc = await getOrCreateClassByDescriptor(defaultClassDescriptor);
+        payload.classId = classDoc ? String(classDoc._id) : null;
+      }
+
+      const resolvedFacultyClassIds = new Set();
+      if (normalizedRole === ROLES.FACULTY) {
+        const manualClassTokens = [
+          ...parseClassIdsInput(payload.classIds),
+          ...parseClassAssignmentTokens(payload.facultyClassAssignments)
+        ];
+
+        for (const token of manualClassTokens) {
+          if (Types.ObjectId.isValid(token)) {
+            resolvedFacultyClassIds.add(String(token));
+            continue;
+          }
+
+          const descriptor = parseClassDescriptorToken(token);
+          if (!descriptor) {
+            throw new ApiError(
+              400,
+              `Invalid faculty class selector "${token}". Use id or DEPT-YEAR-SECTION`
+            );
+          }
+
+          const classDoc = await getOrCreateClassByDescriptor(descriptor);
+          if (classDoc?._id) resolvedFacultyClassIds.add(String(classDoc._id));
+        }
+
+        if (payload.classId && Types.ObjectId.isValid(payload.classId)) {
+          resolvedFacultyClassIds.add(String(payload.classId));
+        }
+
+        payload.classIds = Array.from(resolvedFacultyClassIds);
+      }
+
       const created = await createUserFromPayload(payload, { defaultVerified: true });
       createdUsers.push(mapUserForResponse(created));
     } catch (error) {
@@ -862,7 +1178,7 @@ const getDepartments = asyncHandler(async (req, res) => {
 });
 
 const getClasses = asyncHandler(async (req, res) => {
-  const { departmentId } = req.query;
+  const { departmentId, year, section } = req.query;
   const filter = {};
 
   if (departmentId) {
@@ -870,6 +1186,14 @@ const getClasses = asyncHandler(async (req, res) => {
       throw new ApiError(400, "departmentId is invalid");
     }
     filter.departmentId = departmentId;
+  }
+
+  if (year !== undefined && year !== "") {
+    filter.year = normalizeYearValue(year);
+  }
+
+  if (section !== undefined && section !== "") {
+    filter.section = String(section).trim().toUpperCase();
   }
 
   const classes = await Class.find(filter)
@@ -957,7 +1281,15 @@ const getUploadsAdmin = asyncHandler(async (req, res) => {
   }
 
   const uploads = await Upload.find(filter)
-    .populate({ path: "subjectId", select: "name code classId" })
+    .populate({
+      path: "subjectId",
+      select: "name code classId",
+      populate: {
+        path: "classId",
+        select: "name year section departmentId",
+        populate: { path: "departmentId", select: "name code" }
+      }
+    })
     .populate({
       path: "uploadedBy",
       select: "name email rollNumber branch year section"
@@ -973,7 +1305,16 @@ const getUploadsAdmin = asyncHandler(async (req, res) => {
       subjectId: item.subjectId?._id ? String(item.subjectId._id) : null,
       subjectName: item.subjectId?.name || null,
       subjectCode: item.subjectId?.code || null,
-      classId: item.subjectId?.classId ? String(item.subjectId.classId) : null,
+      classId: item.subjectId?.classId?._id
+        ? String(item.subjectId.classId._id)
+        : item.subjectId?.classId
+          ? String(item.subjectId.classId)
+          : null,
+      className: item.subjectId?.classId?.name || null,
+      classYear: item.subjectId?.classId?.year || null,
+      classSection: item.subjectId?.classId?.section || null,
+      classDepartment: item.subjectId?.classId?.departmentId?.name || null,
+      classDepartmentCode: item.subjectId?.classId?.departmentId?.code || null,
       studentId: item.uploadedBy?._id ? String(item.uploadedBy._id) : null,
       studentName: item.uploadedBy?.name || null,
       rollNumber: item.uploadedBy?.rollNumber || null,
@@ -982,10 +1323,405 @@ const getUploadsAdmin = asyncHandler(async (req, res) => {
       year: item.uploadedBy?.year || null,
       section: item.uploadedBy?.section || null,
       status: item.status,
+      category: item.category || "STUDENT_PRESENTATION",
       fileUrl: item.fileUrl,
       createdAt: item.createdAt
     }))
   });
+});
+
+const downloadAcademicTemplate = asyncHandler(async (req, res) => {
+  sendWorkbook(res, "academic-import-template.xlsx", "AcademicData", [
+    {
+      Year: 2,
+      Department: "Computer Science and Engineering",
+      DepartmentCode: "CSE",
+      Class: "CSE-B",
+      Section: "A",
+      Subject: "Data Structures",
+      SubjectCode: "CS201"
+    },
+    {
+      Year: 2,
+      Department: "Computer Science and Engineering",
+      DepartmentCode: "CSE",
+      Class: "CSE-B",
+      Section: "A",
+      Subject: "Database Management Systems",
+      SubjectCode: "CS202"
+    }
+  ]);
+});
+
+const downloadUsersTemplate = asyncHandler(async (req, res) => {
+  sendWorkbook(res, "users-import-template.xlsx", "Users", [
+    {
+      Name: "Demo Student",
+      Email: "22h51a0501@cmrcet.ac.in",
+      Password: "Student@123",
+      Role: "STUDENT",
+      RollNumber: "22H51A0501",
+      Year: 2,
+      Branch: "CSE",
+      Section: "CSE-A",
+      Mobile: "9000000001",
+      ClassDepartmentCode: "CSE",
+      ClassYear: 2,
+      ClassSection: "A",
+      ClassName: "CSE-A",
+      ClassId: "",
+      ClassIds: "",
+      FacultyClassAssignments: "",
+      IsVerified: true
+    },
+    {
+      Name: "Demo Faculty",
+      Email: "faculty.demo@cmrcet.ac.in",
+      Password: "Faculty@123",
+      Role: "FACULTY",
+      RollNumber: "",
+      Year: "",
+      Branch: "",
+      Section: "",
+      Mobile: "",
+      ClassId: "",
+      ClassDepartmentCode: "",
+      ClassYear: "",
+      ClassSection: "",
+      ClassName: "",
+      ClassIds: "65f0...e2a,65f0...b47",
+      FacultyClassAssignments: "CSE-2-A;ECE-3-B",
+      IsVerified: true
+    }
+  ]);
+});
+
+function mapSpreadsheetRowToAcademicPayload(rawRow = {}) {
+  const row = {};
+  Object.entries(rawRow).forEach(([key, value]) => {
+    const normalizedKey = normalizeImportHeader(key);
+    if (normalizedKey) row[normalizedKey] = value;
+  });
+
+  return {
+    year: getImportFieldValue(row, ["year", "academicyear"]),
+    departmentName: getImportFieldValue(row, ["department", "departmentname", "dept"]),
+    departmentCode: getImportFieldValue(row, ["departmentcode", "deptcode", "branch"]),
+    className: getImportFieldValue(row, ["class", "classname"]),
+    section: getImportFieldValue(row, ["section"]),
+    subjectName: getImportFieldValue(row, ["subject", "subjectname"]),
+    subjectCode: getImportFieldValue(row, ["subjectcode", "code"])
+  };
+}
+
+const bulkImportAcademicByAdmin = asyncHandler(async (req, res) => {
+  const file = req.file;
+  if (!file || !file.buffer || !file.buffer.length) {
+    throw new ApiError(400, "file is required");
+  }
+
+  const rows = extractRowsFromSpreadsheetBuffer(file.buffer);
+  const departmentCache = new Map();
+  const classCache = new Map();
+  const classSubjectCodeCache = new Map();
+  const classSubjectNameCache = new Map();
+  const failed = [];
+  let skippedCount = 0;
+  let createdDepartments = 0;
+  let createdClasses = 0;
+  let createdSubjects = 0;
+  let updatedSubjects = 0;
+
+  async function getOrCreateDepartment({ departmentName, departmentCode }) {
+    const normalizedCode = String(departmentCode || departmentName || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+    if (!normalizedCode) throw new ApiError(400, "Department or DepartmentCode is required");
+    if (departmentCache.has(normalizedCode)) return departmentCache.get(normalizedCode);
+
+    const normalizedName = String(departmentName || normalizedCode).trim();
+    let department = await Department.findOne({ code: normalizedCode }).exec();
+    if (!department) {
+      department = await Department.create({
+        code: normalizedCode,
+        name: normalizedName
+      });
+      createdDepartments += 1;
+    } else if (normalizedName && department.name !== normalizedName) {
+      department.name = normalizedName;
+      await department.save();
+    }
+
+    departmentCache.set(normalizedCode, department);
+    return department;
+  }
+
+  async function getOrCreateClass({ departmentId, year, section, className }) {
+    const key = `${String(departmentId)}:${year}:${String(section).toUpperCase()}`;
+    if (classCache.has(key)) return classCache.get(key);
+
+    const normalizedName = String(className || "").trim() || `Class ${year}-${section}`;
+    const normalizedSection = String(section || "").trim().toUpperCase();
+    let classDoc = await Class.findOne({
+      departmentId,
+      year,
+      section: normalizedSection
+    }).exec();
+
+    if (!classDoc) {
+      classDoc = await Class.create({
+        departmentId,
+        year,
+        section: normalizedSection,
+        name: normalizedName
+      });
+      createdClasses += 1;
+    } else if (normalizedName && classDoc.name !== normalizedName) {
+      classDoc.name = normalizedName;
+      await classDoc.save();
+    }
+
+    classCache.set(key, classDoc);
+    return classDoc;
+  }
+
+  async function hydrateClassSubjectCaches(classId) {
+    const key = String(classId);
+    if (classSubjectCodeCache.has(key) && classSubjectNameCache.has(key)) return;
+
+    const existingSubjects = await Subject.find({ classId })
+      .select("name code")
+      .lean()
+      .exec();
+    const codeSet = new Set(
+      existingSubjects.map((item) => String(item.code || "").trim().toUpperCase()).filter(Boolean)
+    );
+    const nameMap = new Map(
+      existingSubjects.map((item) => [String(item.name || "").trim().toLowerCase(), String(item.code || "")])
+    );
+    classSubjectCodeCache.set(key, codeSet);
+    classSubjectNameCache.set(key, nameMap);
+  }
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const rawRow = rows[index];
+    const rowNumber = index + 2;
+    if (isSpreadsheetRowEmpty(rawRow)) {
+      skippedCount += 1;
+      continue;
+    }
+
+    try {
+      const payload = mapSpreadsheetRowToAcademicPayload(rawRow);
+      const year = normalizeYearValue(payload.year);
+      const section = normalizeSection(payload.section);
+      const subjectName = normalizeExcelString(payload.subjectName);
+      if (!section) throw new ApiError(400, "Section is required");
+      if (!subjectName) throw new ApiError(400, "Subject is required");
+
+      const department = await getOrCreateDepartment({
+        departmentName: payload.departmentName,
+        departmentCode: payload.departmentCode
+      });
+      const classDoc = await getOrCreateClass({
+        departmentId: department._id,
+        year,
+        section,
+        className: payload.className
+      });
+
+      await hydrateClassSubjectCaches(classDoc._id);
+      const classKey = String(classDoc._id);
+      const usedCodes = classSubjectCodeCache.get(classKey);
+      const nameMap = classSubjectNameCache.get(classKey);
+
+      let requestedCode = normalizeExcelString(payload.subjectCode).toUpperCase();
+      if (requestedCode) requestedCode = requestedCode.replace(/[^A-Z0-9]/g, "");
+      if (!requestedCode && nameMap.has(subjectName.toLowerCase())) {
+        requestedCode = nameMap.get(subjectName.toLowerCase());
+      }
+      const resolvedCode = requestedCode || deriveSubjectCode(subjectName, usedCodes);
+      usedCodes.add(resolvedCode);
+      nameMap.set(subjectName.toLowerCase(), resolvedCode);
+
+      const existing = await Subject.findOne({ classId: classDoc._id, code: resolvedCode }).exec();
+      if (!existing) {
+        await Subject.create({
+          classId: classDoc._id,
+          name: subjectName,
+          code: resolvedCode
+        });
+        createdSubjects += 1;
+      } else if (existing.name !== subjectName) {
+        existing.name = subjectName;
+        await existing.save();
+        updatedSubjects += 1;
+      }
+    } catch (error) {
+      failed.push({
+        row: rowNumber,
+        reason: error?.message || "Failed to import row"
+      });
+    }
+  }
+
+  if (
+    createdDepartments === 0 &&
+    createdClasses === 0 &&
+    createdSubjects === 0 &&
+    updatedSubjects === 0 &&
+    failed.length > 0
+  ) {
+    return res.status(400).json({
+      message: "No academic records were imported",
+      createdDepartments,
+      createdClasses,
+      createdSubjects,
+      updatedSubjects,
+      failedCount: failed.length,
+      skippedCount,
+      failed
+    });
+  }
+
+  return res.status(200).json({
+    message: "Academic Excel import completed",
+    createdDepartments,
+    createdClasses,
+    createdSubjects,
+    updatedSubjects,
+    failedCount: failed.length,
+    skippedCount,
+    failed
+  });
+});
+
+const downloadUploadsZipBySection = asyncHandler(async (req, res) => {
+  const {
+    year = "",
+    departmentId = "",
+    departmentCode = "",
+    section = "",
+    classId = "",
+    subjectId = "",
+    category = "STUDENT_PRESENTATION"
+  } = req.query;
+
+  const classFilter = {};
+  if (year !== "") classFilter.year = normalizeYearValue(year);
+  if (section) classFilter.section = String(section).trim().toUpperCase();
+  if (classId) {
+    if (!Types.ObjectId.isValid(classId)) throw new ApiError(400, "classId is invalid");
+    classFilter._id = classId;
+  }
+
+  if (departmentId) {
+    if (!Types.ObjectId.isValid(departmentId)) throw new ApiError(400, "departmentId is invalid");
+    classFilter.departmentId = departmentId;
+  }
+
+  if (departmentCode) {
+    const department = await Department.findOne({
+      code: String(departmentCode).trim().toUpperCase()
+    })
+      .select("_id")
+      .lean()
+      .exec();
+    if (!department?._id) throw new ApiError(404, "Department not found for departmentCode");
+    classFilter.departmentId = department._id;
+  }
+
+  const classDocs = await Class.find(classFilter)
+    .populate({ path: "departmentId", select: "name code" })
+    .lean()
+    .exec();
+  if (!classDocs.length) {
+    throw new ApiError(404, "No classes found for the selected filters");
+  }
+
+  const classIds = classDocs.map((item) => item._id);
+  const subjectFilter = { classId: { $in: classIds } };
+  if (subjectId) {
+    if (!Types.ObjectId.isValid(subjectId)) throw new ApiError(400, "subjectId is invalid");
+    subjectFilter._id = subjectId;
+  }
+  const subjectDocs = await Subject.find(subjectFilter).select("_id classId name code").lean().exec();
+  if (!subjectDocs.length) throw new ApiError(404, "No subjects found for selected filters");
+
+  const subjectIds = subjectDocs.map((item) => item._id);
+  const uploads = await Upload.find({
+    subjectId: { $in: subjectIds },
+    category: String(category || "STUDENT_PRESENTATION").toUpperCase()
+  })
+    .populate({ path: "uploadedBy", select: "name rollNumber email" })
+    .select("subjectId fileUrl fileName fileType createdAt")
+    .lean()
+    .exec();
+
+  if (!uploads.length) throw new ApiError(404, "No uploads found for selected filters");
+
+  const classById = new Map(classDocs.map((item) => [String(item._id), item]));
+  const subjectById = new Map(subjectDocs.map((item) => [String(item._id), item]));
+
+  const zipLabelBase = [
+    departmentCode || classDocs[0]?.departmentId?.code || "DEPT",
+    year || classDocs[0]?.year || "YEAR",
+    section || classDocs[0]?.section || "SECTION"
+  ]
+    .map((item) => sanitizePathSegment(item, "ALL"))
+    .join("_");
+
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename=\"${zipLabelBase}.zip\"`);
+
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.on("error", (archiveError) => {
+    const message = archiveError?.message || "Failed to build zip archive";
+    if (!res.headersSent) {
+      res.status(500).json({ message });
+      return;
+    }
+    res.end();
+  });
+  archive.pipe(res);
+
+  const failedDownloads = [];
+  for (const upload of uploads) {
+    const subject = subjectById.get(String(upload.subjectId));
+    const classDoc = subject ? classById.get(String(subject.classId)) : null;
+    if (!subject || !classDoc || !upload.fileUrl) continue;
+
+    const studentLabel =
+      upload.uploadedBy?.rollNumber ||
+      upload.uploadedBy?.name ||
+      upload.uploadedBy?.email ||
+      "student";
+    const originalName = upload.fileName || `presentation-${String(upload._id)}.pptx`;
+    const fileName = `${sanitizeZipFileName(studentLabel)}_${sanitizeZipFileName(originalName)}`;
+    const filePath = [
+      sanitizePathSegment(`${classDoc.year}Year`, "Year"),
+      sanitizePathSegment(classDoc.departmentId?.code || classDoc.departmentId?.name || "Department"),
+      sanitizePathSegment(classDoc.section || "Section"),
+      sanitizePathSegment(subject.code || subject.name || "Subject"),
+      fileName
+    ].join("/");
+
+    try {
+      const response = await fetch(upload.fileUrl);
+      if (!response.ok) throw new Error(`HTTP_${response.status}`);
+      const arrayBuffer = await response.arrayBuffer();
+      archive.append(Buffer.from(arrayBuffer), { name: filePath });
+    } catch (downloadError) {
+      failedDownloads.push(`${filePath} -> ${downloadError.message || "download_failed"}`);
+    }
+  }
+
+  if (failedDownloads.length > 0) {
+    archive.append(failedDownloads.join("\n"), { name: "_failed_downloads.txt" });
+  }
+
+  archive.finalize();
 });
 
 const getMailSettings = asyncHandler(async (req, res) => {
@@ -1254,7 +1990,9 @@ const getAnnouncementsForAdmin = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  bulkImportAcademicByAdmin,
   bulkImportUsersByAdmin,
+  createSubjectsBulk,
   createAnnouncementByAdmin,
   createUserByAdmin,
   createClass,
@@ -1264,6 +2002,9 @@ module.exports = {
   deleteDepartment,
   deleteSubject,
   deleteUserByAdmin,
+  downloadAcademicTemplate,
+  downloadUploadsZipBySection,
+  downloadUsersTemplate,
   getClasses,
   getDepartments,
   getUploadsAdmin,

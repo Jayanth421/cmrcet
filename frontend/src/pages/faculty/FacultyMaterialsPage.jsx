@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -19,6 +20,18 @@ function getContentType(file) {
   }
   if (lowerName.endsWith(".pdf")) return "application/pdf";
   return "application/octet-stream";
+}
+
+function getStorageUploadNetworkHint(uploadUrl) {
+  const url = String(uploadUrl || "");
+  const origin = typeof window !== "undefined" ? String(window.location.origin || "") : "";
+
+  if (/amazonaws\.com/i.test(url)) {
+    const originHint = origin ? `Add ${origin} to your S3 bucket CORS AllowedOrigins (and allow PUT).` : "";
+    return `Storage upload request was blocked (usually S3 CORS). ${originHint} Or set backend S3_UPLOAD_MODE=proxy to upload via the backend API.`;
+  }
+
+  return "Storage upload request failed to reach the server. Check backend URL and network connectivity.";
 }
 
 export default function FacultyMaterialsPage() {
@@ -73,22 +86,43 @@ export default function FacultyMaterialsPage() {
     setSubmitting(true);
     try {
       const fileType = getContentType(file);
+      const title = String(form.title || "").trim();
+      const description = String(form.description || "").trim();
       const response = await api.post("/faculty/materials/presign", {
         subjectId: form.subjectId,
-        title: form.title,
-        description: form.description,
+        title,
+        description,
         fileName: file.name,
         fileType
       });
 
-      const uploadResponse = await fetch(response.data.uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": fileType },
-        body: file
-      });
-      if (!uploadResponse.ok) {
-        throw new Error("Storage upload failed");
+      const uploadUrl = response.data.uploadUrl;
+      const uploadToken = response.data.uploadToken;
+      if (!uploadUrl || !uploadToken) {
+        throw new Error("Upload URL could not be generated. Please try again.");
       }
+
+      let uploadResponse;
+      try {
+        uploadResponse = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": fileType },
+          body: file
+        });
+      } catch (_fetchError) {
+        throw new Error(getStorageUploadNetworkHint(uploadUrl));
+      }
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        const reason = String(errorText || "").trim();
+        throw new Error(reason ? `Storage upload failed: ${reason}` : "Storage upload failed");
+      }
+
+      await api.post("/faculty/materials/complete", {
+        uploadToken,
+        title,
+        description
+      });
 
       setMessage("Lecture material uploaded.");
       setForm((prev) => ({ ...prev, title: "", description: "" }));
@@ -101,7 +135,7 @@ export default function FacultyMaterialsPage() {
     }
   };
 
-  if (loading) return <p className="text-soft">Loading lecture materials...</p>;
+  if (loading) return <PageLoader label="Loading lecture materials..." />;
 
   return (
     <section className="space-y-5">

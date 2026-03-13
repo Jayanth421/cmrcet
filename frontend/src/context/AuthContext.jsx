@@ -12,13 +12,19 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => getStoredUser());
   const [loading, setLoading] = useState(false);
 
+  const establishSession = ({ accessToken, refreshToken, user: sessionUser }) => {
+    setAuthSession({ accessToken, refreshToken, user: sessionUser });
+    if (sessionUser) {
+      setUser(sessionUser);
+    }
+  };
+
   const login = async ({ identifier, password, role = null }) => {
     setLoading(true);
     try {
       const response = await api.post("/auth/login", { identifier, password, role });
       const { accessToken, refreshToken, user: responseUser } = response.data;
-      setAuthSession({ accessToken, refreshToken, user: responseUser });
-      setUser(responseUser);
+      establishSession({ accessToken, refreshToken, user: responseUser });
       return responseUser;
     } finally {
       setLoading(false);
@@ -37,6 +43,20 @@ export function AuthProvider({ children }) {
     return api.post("/auth/student-setup", payload);
   };
 
+  const completeFacultySetup = async (payload) => {
+    return api.post("/auth/faculty-setup", payload);
+  };
+
+  const getFacultySetupOptions = async (params = {}) => {
+    const response = await api.get("/auth/faculty-setup/options", { params });
+    return response.data || { departments: [], classes: [] };
+  };
+
+  const getStudentSetupOptions = async (params = {}) => {
+    const response = await api.get("/auth/student-setup/options", { params });
+    return response.data || { departments: [], classes: [] };
+  };
+
   const logout = async () => {
     try {
       const refreshToken = localStorage.getItem("cmr_refresh_token");
@@ -53,8 +73,7 @@ export function AuthProvider({ children }) {
 
   const updateUserSession = (nextUser) => {
     if (!nextUser) return;
-    setAuthSession({ user: nextUser });
-    setUser(nextUser);
+    establishSession({ user: nextUser });
   };
 
   const value = useMemo(
@@ -65,10 +84,14 @@ export function AuthProvider({ children }) {
       role: user?.role || null,
       login,
       logout,
+      establishSession,
       updateUserSession,
       register,
       verifyOtp,
-      completeStudentSetup
+      completeStudentSetup,
+      completeFacultySetup,
+      getFacultySetupOptions,
+      getStudentSetupOptions
     }),
     [loading, user]
   );

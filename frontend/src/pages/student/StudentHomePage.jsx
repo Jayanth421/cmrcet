@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import useAuth from "../../hooks/useAuth";
 import api from "../../services/api";
 
@@ -9,17 +10,17 @@ function formatDateTime(value) {
 }
 
 function getStatusClass(status) {
-  if (status === "APPROVED") return "bg-emerald-300/30 text-emerald-50";
-  if (status === "REJECTED") return "bg-red-300/30 text-red-50";
-  if (status === "UPLOADED") return "bg-blue-300/30 text-blue-50";
-  return "bg-amber-300/30 text-amber-50";
+  if (status === "APPROVED") return "bg-emerald-100 text-emerald-900";
+  if (status === "REJECTED") return "bg-red-100 text-red-900";
+  if (status === "UPLOADED") return "bg-violet-100 text-violet-900";
+  return "bg-amber-100 text-amber-900";
 }
 
 function MetricTile({ label, value }) {
   return (
-    <div className="rounded-2xl border border-white/20 bg-white/10 p-3">
-      <p className="text-[11px] uppercase tracking-[0.14em] text-blue-100/80">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-white">{value}</p>
+    <div className="rounded-2xl border border-[#7F49B4] bg-white p-3">
+      <p className="text-[11px] uppercase tracking-[0.14em] text-[#7F49B4]">{label}</p>
+      <p className="mt-1 text-2xl font-semibold text-[#7F49B4]">{value}</p>
     </div>
   );
 }
@@ -53,7 +54,7 @@ export default function StudentHomePage() {
     loadDashboard();
   }, []);
 
-  if (state.loading) return <p className="text-soft">Loading student dashboard...</p>;
+  if (state.loading) return <PageLoader label="Loading student dashboard..." />;
   if (state.error) return <p className="text-red-300">{state.error}</p>;
 
   const profile = state.dashboard?.profile || {};
@@ -91,8 +92,8 @@ export default function StudentHomePage() {
 
   return (
     <section className="space-y-4 sm:space-y-5">
-      <div className="space-y-4 md:hidden">
-        <GlassCard className="rounded-3xl border-white/20 bg-gradient-to-br from-[#c8c0ff33] via-[#7f73ff44] to-[#2b4dc955] p-5">
+      <div className="space-y-4 lg:hidden">
+        <GlassCard className="rounded-3xl border-white/20 bg-gradient-to-br from-[#7F49B433] via-[#7F49B444] to-[#14141455] p-5">
           <p className="text-sm text-blue-100/85">Student Dashboard</p>
           <h3 className="mt-1 font-display text-3xl text-white">Hello, {firstName}!</h3>
           <p className="mt-2 text-xs text-blue-100/80">
@@ -206,16 +207,16 @@ export default function StudentHomePage() {
         </GlassCard>
       </div>
 
-      <div className="hidden space-y-5 md:block">
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <GlassCard className="rounded-3xl border-white/20 bg-gradient-to-br from-[#c8c0ff33] via-[#7f73ff44] to-[#2b4dc955] p-5 lg:col-span-2">
+      <div className="hidden space-y-5 lg:block">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
+          <GlassCard className="h-full rounded-3xl border-white/20 bg-gradient-to-br from-[#7F49B433] via-[#7F49B444] to-[#14141455] p-5">
             <p className="text-sm text-blue-100/85">Student Dashboard</p>
             <h3 className="mt-1 font-display text-3xl text-white">Welcome back, {firstName}</h3>
             <p className="mt-2 text-sm text-blue-100/80">
               Keep your presentations updated and monitor review status from one place.
             </p>
           </GlassCard>
-          <GlassCard className="rounded-3xl p-5">
+          <GlassCard className="h-full rounded-3xl p-5">
             <p className="text-xs uppercase tracking-[0.16em] text-soft">Quick Stats</p>
             <div className="mt-3 space-y-2 text-sm">
               <p className="flex items-center justify-between text-white">
@@ -234,8 +235,8 @@ export default function StudentHomePage() {
           </GlassCard>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-          <GlassCard className="xl:col-span-3">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.7fr_1fr]">
+          <GlassCard className="h-full">
             <h3 className="font-display text-lg text-white">Assigned Subjects</h3>
             <div className="mt-4 overflow-x-auto">
               <table className="min-w-full text-left text-sm">
@@ -269,7 +270,7 @@ export default function StudentHomePage() {
             </div>
           </GlassCard>
 
-          <GlassCard className="xl:col-span-2">
+          <GlassCard className="h-full">
             <h3 className="font-display text-lg text-white">Notifications</h3>
             {notifications.length === 0 ? (
               <p className="mt-3 text-soft">No notifications available.</p>
@@ -287,7 +288,7 @@ export default function StudentHomePage() {
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <GlassCard>
+          <GlassCard className="h-full">
             <h3 className="font-display text-lg text-white">Recent Uploads</h3>
             {recentUploads.length === 0 ? (
               <p className="mt-3 text-soft">No uploads yet.</p>
@@ -307,7 +308,7 @@ export default function StudentHomePage() {
             )}
           </GlassCard>
 
-          <GlassCard>
+          <GlassCard className="h-full">
             <h3 className="font-display text-lg text-white">Activity History</h3>
             {activityHistory.length === 0 ? (
               <p className="mt-3 text-soft">No activity yet.</p>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import GlassCard from "../../components/GlassCard";
 import PortalIcon from "../../components/PortalIcon";
@@ -47,15 +47,15 @@ function getRoleIcon(role) {
 function getRoleTone(role) {
   switch (role) {
     case "ADMIN":
-      return "bg-violetBrand-500/25 text-violet-100";
+      return "border border-slate-200 bg-slate-100 text-slate-900";
     case "FACULTY":
-      return "bg-brand-500/25 text-blue-100";
+      return "border border-slate-200 bg-slate-50 text-slate-900";
     case "STUDENT":
-      return "bg-emerald-500/25 text-emerald-100";
+      return "border border-slate-200 bg-slate-50 text-slate-900";
     case "SMARTBOARD":
-      return "bg-amber-500/25 text-amber-100";
+      return "border border-slate-200 bg-slate-50 text-slate-900";
     default:
-      return "bg-white/15 text-white";
+      return "border border-slate-200 bg-white text-slate-900";
   }
 }
 
@@ -105,16 +105,12 @@ export default function AdminUsersPage() {
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
   const [importInputKey, setImportInputKey] = useState(0);
+  const [academicImporting, setAcademicImporting] = useState(false);
+  const [academicSummary, setAcademicSummary] = useState(null);
+  const [academicInputKey, setAcademicInputKey] = useState(0);
+  const [downloadLoading, setDownloadLoading] = useState("");
   const [confirmCreateOpen, setConfirmCreateOpen] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
-
-  const classMap = useMemo(() => {
-    const map = new Map();
-    classes.forEach((item) => {
-      map.set(item.id, item);
-    });
-    return map;
-  }, [classes]);
 
   const loadUsers = async (roleFilter = selectedRole) => {
     setLoading(true);
@@ -249,6 +245,72 @@ export default function AdminUsersPage() {
     }
   };
 
+  const downloadTemplate = async (type) => {
+    const endpoint = type === "academic" ? "/admin/templates/academic" : "/admin/templates/users";
+    const fallbackFileName =
+      type === "academic" ? "academic-import-template.xlsx" : "users-import-template.xlsx";
+    setDownloadLoading(type);
+    setError("");
+    setMessage("");
+    try {
+      const response = await api.get(endpoint, { responseType: "blob" });
+      const disposition = String(response.headers?.["content-disposition"] || "");
+      const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+      const fileName = fileNameMatch?.[1] || fallbackFileName;
+      const blobUrl = window.URL.createObjectURL(new Blob([response.data]));
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(blobUrl);
+      setMessage(`Downloaded ${fileName}`);
+    } catch (requestError) {
+      setError(requestError?.response?.data?.message || "Template download failed");
+    } finally {
+      setDownloadLoading("");
+    }
+  };
+
+  const handleAcademicImport = async (event) => {
+    event.preventDefault();
+    const fileInput = event.currentTarget.elements.academicImportFile;
+    const file = fileInput?.files?.[0];
+
+    if (!file) {
+      setError("Please select an academic Excel file");
+      setMessage("");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setAcademicSummary(null);
+    setAcademicImporting(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await api.post("/admin/academic/bulk-import", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      setAcademicSummary(response.data || null);
+      setMessage("Academic Excel import completed.");
+      setAcademicInputKey((prev) => prev + 1);
+      await loadUsers();
+    } catch (requestError) {
+      const responseData = requestError?.response?.data;
+      if (responseData && typeof responseData === "object") {
+        setAcademicSummary(responseData);
+      }
+      setError(responseData?.message || "Failed to import academic data");
+    } finally {
+      setAcademicImporting(false);
+    }
+  };
+
   const startEdit = (user) => {
     setEditForm({
       id: user.id,
@@ -311,6 +373,91 @@ export default function AdminUsersPage() {
   return (
     <section className="space-y-5">
       <GlassCard>
+        <h3 className="font-display text-lg text-white">Demo Excel Templates</h3>
+        <p className="mt-2 text-sm text-soft">
+          Download, modify, and upload these files to create users, departments, classes, sections, and
+          subjects in bulk.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => downloadTemplate("users")}
+            className="rounded-xl bg-white/15 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/25 disabled:opacity-70"
+            disabled={downloadLoading === "users"}
+          >
+            {downloadLoading === "users" ? "Downloading..." : "Download Users Template"}
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadTemplate("academic")}
+            className="rounded-xl bg-white/15 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/25 disabled:opacity-70"
+            disabled={downloadLoading === "academic"}
+          >
+            {downloadLoading === "academic" ? "Downloading..." : "Download Academic Template"}
+          </button>
+        </div>
+      </GlassCard>
+
+      <GlassCard>
+        <h3 className="font-display text-lg text-white">Bulk Import Academic Structure</h3>
+        <p className="mt-2 text-sm text-soft">
+          Upload academic Excel to auto-create Year, Department, Class, Section, and Subject data.
+        </p>
+        <form className="mt-4 flex flex-wrap items-center gap-3" onSubmit={handleAcademicImport}>
+          <input
+            key={academicInputKey}
+            name="academicImportFile"
+            type="file"
+            accept=".csv,.xls,.xlsx"
+            className="rounded-xl border border-white/20 bg-white/5 px-3 py-2 text-sm text-white outline-none file:mr-3 file:rounded-lg file:border-0 file:bg-white/15 file:px-3 file:py-1 file:text-xs file:text-white hover:file:bg-white/25"
+          />
+          <button
+            className="rounded-xl bg-gradient-to-r from-violetBrand-500 to-brand-500 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-70"
+            type="submit"
+            disabled={academicImporting}
+          >
+            {academicImporting ? "Importing..." : "Import Academic Excel"}
+          </button>
+        </form>
+
+        {academicSummary ? (
+          <div className="mt-4 space-y-2 text-sm">
+            <p className="text-slate-200">
+              Departments:{" "}
+              <span className="font-semibold text-emerald-300">
+                {academicSummary.createdDepartments || 0}
+              </span>{" "}
+              | Classes:{" "}
+              <span className="font-semibold text-emerald-300">
+                {academicSummary.createdClasses || 0}
+              </span>{" "}
+              | Subjects:{" "}
+              <span className="font-semibold text-emerald-300">
+                {academicSummary.createdSubjects || 0}
+              </span>{" "}
+              | Updated Subjects:{" "}
+              <span className="font-semibold text-amber-300">
+                {academicSummary.updatedSubjects || 0}
+              </span>{" "}
+              | Failed:{" "}
+              <span className="font-semibold text-red-300">
+                {academicSummary.failedCount || 0}
+              </span>
+            </p>
+            {Array.isArray(academicSummary.failed) && academicSummary.failed.length > 0 ? (
+              <div className="max-h-40 overflow-y-auto rounded-xl border border-white/10 bg-black/20 p-3 text-xs text-red-200">
+                {academicSummary.failed.map((item, index) => (
+                  <p key={`${item.row || index}-${index}`}>
+                    Row {item.row || "-"}: {item.reason || "Failed"}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </GlassCard>
+
+      <GlassCard>
         <h3 className="font-display text-lg text-white">Bulk Import Users</h3>
         <p className="mt-2 text-sm text-soft">
           Upload a <span className="text-white">.csv</span>, <span className="text-white">.xls</span>, or{" "}
@@ -318,7 +465,8 @@ export default function AdminUsersPage() {
         </p>
         <p className="mt-2 text-xs text-soft">
           Required columns: name, email, password, role. Optional: rollNumber, year, branch,
-          section, mobile, classId, classIds, isVerified.
+          section, mobile, classId, classIds, classDepartmentCode, classYear, classSection,
+          className, facultyClassAssignments, isVerified.
         </p>
         <form className="mt-4 flex flex-wrap items-center gap-3" onSubmit={handleBulkImport}>
           <input
@@ -543,14 +691,14 @@ export default function AdminUsersPage() {
 
       {confirmCreateOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-[#d5def1] bg-[#ffffff] p-5 shadow-2xl">
-            <p className="text-lg font-display text-white">Create this user?</p>
-            <p className="mt-2 text-sm text-soft">
-              Name: <span className="text-white">{createForm.name || "-"}</span>
+          <div className="w-full max-w-md rounded-2xl border border-[#CFCFCF] bg-[#CFCFCF] p-5 shadow-2xl">
+            <p className="text-lg font-display text-slate-900">Create this user?</p>
+            <p className="mt-2 text-sm text-slate-600">
+              Name: <span className="text-slate-900">{createForm.name || "-"}</span>
               <br />
-              Email: <span className="text-white">{createForm.email || "-"}</span>
+              Email: <span className="text-slate-900">{createForm.email || "-"}</span>
               <br />
-              Role: <span className="text-white">{createForm.role}</span>
+              Role: <span className="text-slate-900">{createForm.role}</span>
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <button
@@ -563,7 +711,7 @@ export default function AdminUsersPage() {
               <button
                 type="button"
                 onClick={() => setConfirmCreateOpen(false)}
-                className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/20"
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
               >
                 Cancel
               </button>
@@ -795,7 +943,7 @@ export default function AdminUsersPage() {
                             className="h-9 w-9 rounded-full object-cover ring-2 ring-white/10"
                           />
                         ) : (
-                          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-violetBrand-500 text-xs font-semibold text-white">
+                          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-slate-200 text-xs font-semibold text-[#141414]">
                             {getInitials(user.name, user.email)}
                           </span>
                         )}

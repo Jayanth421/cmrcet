@@ -37,6 +37,15 @@ export default function VerifyOtpPage() {
             }),
           900
         );
+      } else if (location.state?.next === "faculty-setup") {
+        setMessage("Account verified successfully. Continue faculty setup.");
+        setTimeout(
+          () =>
+            navigate("/faculty/setup", {
+              state: { email: email.trim(), autoLogin }
+            }),
+          900
+        );
       } else if (autoLogin) {
         const user = await login(autoLogin);
         setMessage("Account verified. Logging you in.");

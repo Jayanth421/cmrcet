@@ -3,6 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import AuthShell from "../components/AuthShell";
 import api from "../services/api";
 
+const COLLEGE_EMAIL_REGEX = /^[^\s@]+@cmrcet\.ac\.in$/i;
+
 export default function ForgotPasswordPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
@@ -15,7 +17,15 @@ export default function ForgotPasswordPage() {
   const [message, setMessage] = useState("");
 
   const inputClass =
-    "w-full rounded-xl border border-white/15 bg-[#0f1734] px-4 py-3 text-white outline-none placeholder:text-slate-400 transition focus:border-brand-300";
+    "w-full rounded-xl border border-white/15 bg-[#141414] px-4 py-3 text-white outline-none placeholder:text-slate-400 transition focus:border-white focus:ring-2 focus:ring-white/20";
+
+  const validateCollegeEmail = (value) => {
+    const normalizedEmail = String(value || "").trim().toLowerCase();
+    if (!COLLEGE_EMAIL_REGEX.test(normalizedEmail)) {
+      throw new Error("Use your college email ID only (example: name@cmrcet.ac.in)");
+    }
+    return normalizedEmail;
+  };
 
   const requestOtp = async (event) => {
     event.preventDefault();
@@ -23,11 +33,17 @@ export default function ForgotPasswordPage() {
     setError("");
     setMessage("");
     try {
-      const response = await api.post("/auth/forgot-password", { email: email.trim() });
+      const normalizedEmail = validateCollegeEmail(email);
+      const response = await api.post("/auth/forgot-password", { email: normalizedEmail });
+      setEmail(normalizedEmail);
       setOtpSent(true);
-      setMessage(response.data?.message || "OTP sent to your email.");
+      setMessage(response.data?.message || "OTP sent to your college email.");
     } catch (requestError) {
-      setError(requestError?.response?.data?.message || "Failed to send reset OTP");
+      if (requestError.message === "Use your college email ID only (example: name@cmrcet.ac.in)") {
+        setError(requestError.message);
+      } else {
+        setError(requestError?.response?.data?.message || "Failed to send reset OTP");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -43,9 +59,10 @@ export default function ForgotPasswordPage() {
       if (newPassword !== confirmPassword) {
         throw new Error("Passwords do not match");
       }
+      const normalizedEmail = validateCollegeEmail(email);
 
       const response = await api.post("/auth/reset-password", {
-        email: email.trim(),
+        email: normalizedEmail,
         otp: otp.trim(),
         newPassword
       });
@@ -55,6 +72,10 @@ export default function ForgotPasswordPage() {
     } catch (requestError) {
       if (requestError.message === "Passwords do not match") {
         setError("Passwords do not match");
+      } else if (
+        requestError.message === "Use your college email ID only (example: name@cmrcet.ac.in)"
+      ) {
+        setError(requestError.message);
       } else {
         setError(requestError?.response?.data?.message || "Failed to reset password");
       }
@@ -71,6 +92,8 @@ export default function ForgotPasswordPage() {
       helperText="Remember your password?"
       helperLinkLabel="Sign In."
       helperLinkTo="/login"
+      loading={submitting}
+      loadingLabel="Processing..."
     >
       {!otpSent ? (
         <form className="mt-6 space-y-4" onSubmit={requestOtp}>
@@ -82,7 +105,7 @@ export default function ForgotPasswordPage() {
               id="forgot-email"
               className={inputClass}
               type="email"
-              placeholder="Enter your registered email"
+              placeholder="Enter college email (name@cmrcet.ac.in)"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
@@ -93,7 +116,7 @@ export default function ForgotPasswordPage() {
           {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
 
           <button
-            className="w-full rounded-xl bg-[#3f66ff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#4e74ff] disabled:opacity-70"
+            className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-70"
             type="submit"
             disabled={submitting}
           >
@@ -101,7 +124,7 @@ export default function ForgotPasswordPage() {
           </button>
 
           <p className="text-xs text-slate-400">
-            OTP will be sent to your registered email address.
+            OTP will be sent only to your college email ID.
           </p>
         </form>
       ) : (
@@ -170,7 +193,7 @@ export default function ForgotPasswordPage() {
           {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
 
           <button
-            className="w-full rounded-xl bg-[#3f66ff] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#4e74ff] disabled:opacity-70"
+            className="w-full rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-70"
             type="submit"
             disabled={submitting}
           >
@@ -199,3 +222,4 @@ export default function ForgotPasswordPage() {
     </AuthShell>
   );
 }
+

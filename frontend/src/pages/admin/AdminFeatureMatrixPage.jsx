@@ -313,9 +313,9 @@ function getSectionCounts(section) {
 function FeatureItem({ item, onOpen }) {
   const isLive = item.status === STATUS.LIVE;
   return (
-    <li className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[#dbe3f4] bg-[#f5f8ff] px-3 py-2">
+    <li className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[#CFCFCF] bg-[#CFCFCF] px-3 py-2">
       <div className="min-w-0">
-        <p className="text-sm text-[#24365f]">{item.label}</p>
+        <p className="text-sm text-[#141414]">{item.label}</p>
         {item.note ? <p className="mt-1 text-xs text-soft">{item.note}</p> : null}
       </div>
       <div className="flex items-center gap-2">
@@ -332,7 +332,7 @@ function FeatureItem({ item, onOpen }) {
           <button
             type="button"
             onClick={() => onOpen(item.path)}
-            className="rounded-md bg-[#2f49c8] px-2 py-1 text-xs text-white transition hover:bg-[#2940b0]"
+            className="rounded-md bg-[#141414] px-2 py-1 text-xs text-white transition hover:bg-[#141414]"
           >
             Open
           </button>
@@ -345,7 +345,7 @@ function FeatureItem({ item, onOpen }) {
 function FeatureGroup({ group, onOpen }) {
   const liveCount = group.items.filter((item) => item.status === STATUS.LIVE).length;
   return (
-    <div className="rounded-xl border border-[#dbe3f4] bg-[#f9fbff] p-3">
+    <div className="rounded-xl border border-[#CFCFCF] bg-[#CFCFCF] p-3">
       <div className="flex items-start justify-between gap-2">
         <p className="text-xs uppercase tracking-[0.18em] text-soft">{group.label}</p>
         <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-soft">
@@ -364,7 +364,7 @@ function FeatureGroup({ group, onOpen }) {
 function FeatureSection({ section, onOpen }) {
   const counts = getSectionCounts(section);
   return (
-    <GlassCard className="admin-panel-outline border-[#dbe3f4] bg-[#ffffff]">
+    <GlassCard className="admin-panel-outline border-[#CFCFCF] bg-[#CFCFCF]">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="flex items-start gap-3">
           <span
@@ -374,19 +374,19 @@ function FeatureSection({ section, onOpen }) {
           </span>
           <div>
             <p className="text-xs uppercase tracking-[0.22em] text-soft">{section.key}</p>
-            <h3 className="admin-heading text-2xl text-[#1f2d4f]">{section.title}</h3>
+            <h3 className="admin-heading text-2xl text-[#141414]">{section.title}</h3>
             <p className="mt-1 text-sm text-soft">{section.description}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full border border-[#d3dcf1] bg-[#eff4ff] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-[#2f49c8]">
+          <span className="rounded-full border border-[#CFCFCF] bg-[#CFCFCF] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-[#141414]">
             {counts.liveCount}/{counts.total} live
           </span>
           {section.modulePath ? (
             <button
               type="button"
               onClick={() => onOpen(section.modulePath)}
-              className="rounded-full border border-[#cbd7f1] bg-[#edf2ff] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-[#2f49c8] transition hover:bg-[#e3ebff]"
+              className="rounded-full border border-[#CFCFCF] bg-[#CFCFCF] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-[#141414] transition hover:bg-[#CFCFCF]"
             >
               Open Module
             </button>
@@ -469,41 +469,41 @@ export default function AdminFeatureMatrixPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.28em] text-soft">Admin Panel</p>
-          <h1 className="admin-heading text-4xl text-[#1f2d4f] md:text-5xl">Feature Matrix</h1>
+          <h1 className="admin-heading text-4xl text-[#141414] md:text-5xl">Feature Matrix</h1>
           <p className="mt-2 text-sm text-soft">
             Interactive map of implemented and pending admin capabilities. Live entries open the
             working module directly.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <div className="rounded-2xl border border-[#d5deef] bg-[#ffffff] px-4 py-3 text-right">
+          <div className="rounded-2xl border border-[#CFCFCF] bg-[#CFCFCF] px-4 py-3 text-right">
             <p className="text-xs uppercase tracking-[0.2em] text-soft">Sections</p>
-            <p className="text-2xl font-semibold text-[#1f2d4f]">{FEATURE_SECTIONS.length}</p>
+            <p className="text-2xl font-semibold text-[#141414]">{FEATURE_SECTIONS.length}</p>
           </div>
-          <div className="rounded-2xl border border-[#d5deef] bg-[#ffffff] px-4 py-3 text-right">
+          <div className="rounded-2xl border border-[#CFCFCF] bg-[#CFCFCF] px-4 py-3 text-right">
             <p className="text-xs uppercase tracking-[0.2em] text-soft">Live</p>
             <p className="text-2xl font-semibold text-emerald-700">{totals.liveCapabilities}</p>
           </div>
-          <div className="rounded-2xl border border-[#d5deef] bg-[#ffffff] px-4 py-3 text-right">
+          <div className="rounded-2xl border border-[#CFCFCF] bg-[#CFCFCF] px-4 py-3 text-right">
             <p className="text-xs uppercase tracking-[0.2em] text-soft">Planned</p>
             <p className="text-2xl font-semibold text-amber-700">{totals.plannedCapabilities}</p>
           </div>
-          <div className="rounded-2xl border border-[#d5deef] bg-[#ffffff] px-4 py-3 text-right">
+          <div className="rounded-2xl border border-[#CFCFCF] bg-[#CFCFCF] px-4 py-3 text-right">
             <p className="text-xs uppercase tracking-[0.2em] text-soft">Coverage</p>
-            <p className="text-2xl font-semibold text-[#1f2d4f]">{totals.coverage}%</p>
+            <p className="text-2xl font-semibold text-[#141414]">{totals.coverage}%</p>
           </div>
         </div>
       </div>
 
-      <GlassCard className="admin-panel-outline border-[#dbe3f4] bg-[#ffffff] p-4">
+      <GlassCard className="admin-panel-outline border-[#CFCFCF] bg-[#CFCFCF] p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#d5deef] bg-[#f7faff] px-3 py-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#CFCFCF] bg-[#CFCFCF] px-3 py-2">
             <PortalIcon name="search" className="h-4 w-4 text-soft" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search feature, section, or note"
-              className="w-full bg-transparent text-sm text-[#1f2d4f] outline-none placeholder:text-soft"
+              className="w-full bg-transparent text-sm text-[#141414] outline-none placeholder:text-soft"
             />
           </div>
           <div className="flex flex-wrap gap-2">
@@ -514,8 +514,8 @@ export default function AdminFeatureMatrixPage() {
                 onClick={() => setStatusFilter(filter)}
                 className={`rounded-full px-3 py-1 text-xs font-semibold tracking-[0.18em] transition ${
                   statusFilter === filter
-                    ? "bg-[#2f49c8] text-white"
-                    : "border border-[#d3dcf0] bg-[#f2f6ff] text-[#4f5d86] hover:bg-[#e6eeff]"
+                    ? "bg-[#141414] text-white"
+                    : "border border-[#CFCFCF] bg-[#CFCFCF] text-[#141414] hover:bg-[#CFCFCF]"
                 }`}
               >
                 {filter}
@@ -526,7 +526,7 @@ export default function AdminFeatureMatrixPage() {
       </GlassCard>
 
       {filteredSections.length === 0 ? (
-        <GlassCard className="border-[#dbe3f4] bg-[#ffffff]">
+        <GlassCard className="border-[#CFCFCF] bg-[#CFCFCF]">
           <p className="text-soft">No feature matches current search/filter.</p>
         </GlassCard>
       ) : (

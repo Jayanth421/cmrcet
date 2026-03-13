@@ -3,7 +3,9 @@ const multer = require("multer");
 const path = require("path");
 const { ROLES } = require("../config/constants");
 const {
+  bulkImportAcademicByAdmin,
   bulkImportUsersByAdmin,
+  createSubjectsBulk,
   createAnnouncementByAdmin,
   createUserByAdmin,
   createClass,
@@ -13,6 +15,9 @@ const {
   deleteDepartment,
   deleteSubject,
   deleteUserByAdmin,
+  downloadAcademicTemplate,
+  downloadUploadsZipBySection,
+  downloadUsersTemplate,
   getClasses,
   getDepartments,
   getUploadsAdmin,
@@ -53,6 +58,7 @@ const uploadUserImportFile = (req, res, next) => {
     return next(error);
   });
 };
+const uploadAcademicImportFile = uploadUserImportFile;
 
 router.use(verifyJWT, authorizeRoles(ROLES.ADMIN));
 
@@ -62,13 +68,18 @@ router.get("/departments", getDepartments);
 router.get("/classes", getClasses);
 router.get("/subjects", getSubjects);
 router.get("/uploads", getUploadsAdmin);
+router.get("/downloads/uploads-zip", downloadUploadsZipBySection);
+router.get("/templates/academic", downloadAcademicTemplate);
+router.get("/templates/users", downloadUsersTemplate);
 router.get("/settings/mail", getMailSettings);
 router.get("/announcements", getAnnouncementsForAdmin);
 router.post("/departments", createDepartment);
 router.post("/classes", createClass);
 router.post("/subjects", createSubject);
+router.post("/subjects/bulk", createSubjectsBulk);
 router.post("/users", createUserByAdmin);
 router.post("/users/bulk-import", uploadUserImportFile, bulkImportUsersByAdmin);
+router.post("/academic/bulk-import", uploadAcademicImportFile, bulkImportAcademicByAdmin);
 router.post("/settings/mail/test", sendTestMail);
 router.post("/mail/send", sendBulkMail);
 router.post("/announcements", createAnnouncementByAdmin);

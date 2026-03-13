@@ -36,7 +36,7 @@ const sections = [
 export default function TermsAndConditionsPage() {
   return (
     <div className="background min-h-screen px-4 py-8 md:px-8">
-      <div className="mx-auto w-full max-w-4xl rounded-3xl border border-white/10 bg-[#070e25]/85 p-6 shadow-[0_30px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl md:p-8">
+      <div className="mx-auto w-full max-w-4xl rounded-3xl border border-white/10 bg-[#141414]/85 p-6 shadow-[0_30px_80px_rgba(20, 20, 20, 0.45)] backdrop-blur-xl md:p-8">
         <h1 className="font-display text-3xl text-white md:text-4xl">Terms and Conditions</h1>
         <p className="mt-2 text-sm text-slate-300">Last updated: March 4, 2026</p>
 
@@ -44,7 +44,7 @@ export default function TermsAndConditionsPage() {
           {sections.map((section) => (
             <section
               key={section.title}
-              className="rounded-2xl border border-white/10 bg-[#090f24]/80 p-4"
+              className="rounded-2xl border border-white/10 bg-[#141414]/80 p-4"
             >
               <h2 className="text-base font-semibold text-white">{section.title}</h2>
               <p className="mt-2 text-sm leading-6 text-slate-300">{section.content}</p>
@@ -58,7 +58,7 @@ export default function TermsAndConditionsPage() {
 
         <div className="mt-4 flex flex-wrap gap-3">
           <Link
-            className="rounded-xl bg-[#3f66ff] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#4e74ff]"
+            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#7F49B4]"
             to="/login"
           >
             Back to Sign In
@@ -74,3 +74,4 @@ export default function TermsAndConditionsPage() {
     </div>
   );
 }
+

@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 function Metric({ label, value }) {
@@ -34,7 +35,7 @@ export default function FacultyDashboardPage() {
     loadData();
   }, []);
 
-  if (state.loading) return <p className="text-soft">Loading faculty dashboard...</p>;
+  if (state.loading) return <PageLoader label="Loading faculty dashboard..." />;
   if (state.error) return <p className="text-red-300">{state.error}</p>;
 
   const metrics = state.data?.metrics || {};

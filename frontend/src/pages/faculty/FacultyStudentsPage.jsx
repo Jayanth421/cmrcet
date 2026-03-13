@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 export default function FacultyStudentsPage() {
@@ -38,7 +39,7 @@ export default function FacultyStudentsPage() {
     });
   }, [search, students]);
 
-  if (loading) return <p className="text-soft">Loading students...</p>;
+  if (loading) return <PageLoader label="Loading students..." />;
 
   return (
     <section className="space-y-5">

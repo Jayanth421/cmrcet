@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import GlassCard from "../../components/GlassCard";
+import PageLoader from "../../components/PageLoader";
 import api from "../../services/api";
 
 function getBadgeClass(type, status) {
@@ -48,12 +49,12 @@ export default function StudentActivityPage() {
     };
   }, [activity]);
 
-  if (loading) return <p className="text-soft">Loading activity...</p>;
+  if (loading) return <PageLoader label="Loading activity..." />;
 
   return (
     <section className="space-y-4 sm:space-y-5">
       <div className="space-y-4 md:hidden">
-        <GlassCard className="rounded-3xl border-white/20 bg-gradient-to-br from-[#d2ccff33] via-[#7f73ff44] to-[#2b4dc955] p-5">
+        <GlassCard className="rounded-3xl border-white/20 bg-gradient-to-br from-[#7F49B433] via-[#7F49B444] to-[#14141455] p-5">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm text-blue-100/85">Student Activity</p>

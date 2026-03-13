@@ -10,12 +10,20 @@ const Department = require("../mongoModels/Department");
 const Subject = require("../mongoModels/Subject");
 const Upload = require("../mongoModels/Upload");
 const User = require("../mongoModels/User");
-const { buildPublicFileUrl, createPresignedUploadUrl } = require("../services/s3Service");
+const { signUploadToken, verifyUploadToken } = require("../config/jwt");
+const { buildFileUrl, buildUploadUrl, doesUploadedFileExist } = require("../services/storageService");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 
 function buildOfficeViewerUrl(fileUrl) {
   return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`;
+}
+
+function getRequestOrigin(req) {
+  const proto = String(req.protocol || "http").trim();
+  const host = String(req.get("host") || "").trim();
+  if (!host) return "";
+  return `${proto}://${host}`;
 }
 
 function sanitizeFileName(fileName) {
@@ -34,6 +42,32 @@ function ensureObjectId(value, fieldName) {
   if (!value) throw new ApiError(400, `${fieldName} is required`);
   if (!Types.ObjectId.isValid(value)) throw new ApiError(400, `${fieldName} is invalid`);
   return String(value);
+}
+
+function sanitizePathPart(value, fallback = "unknown") {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_");
+  return normalized || fallback;
+}
+
+async function getClassStorageContext(classId) {
+  if (!classId || !Types.ObjectId.isValid(classId)) return null;
+
+  const classDoc = await Class.findById(classId)
+    .select("year section departmentId")
+    .populate({ path: "departmentId", select: "code" })
+    .lean()
+    .exec();
+
+  if (!classDoc) return null;
+  return {
+    year: classDoc.year || null,
+    section: classDoc.section || null,
+    departmentCode: classDoc.departmentId?.code || null
+  };
 }
 
 async function resolveStudentClassId(user) {
@@ -142,49 +176,44 @@ async function validateSubjectForStudentClass(subjectId, classId) {
   return subject;
 }
 
-function buildStudentUploadKey({ user, subject, fileName }) {
+function buildStudentUploadKey({ user, subject, fileName, storageContext = null }) {
   const safeName = sanitizeFileName(fileName);
-  return `${user.year || "year-unknown"}/${(user.branch || "branch-unknown").toLowerCase()}/${(user.section || "section-unknown").toLowerCase()}/${(subject.code || subject.id).toString().toLowerCase()}/student/${Date.now()}-${safeName}`;
+  const yearSegment = sanitizePathPart(storageContext?.year || user.year || "year-unknown");
+  const departmentSegment = sanitizePathPart(
+    String(storageContext?.departmentCode || user.branch || "department-unknown").toLowerCase()
+  );
+  const sectionSegment = sanitizePathPart(
+    String(storageContext?.section || user.section || "section-unknown").toLowerCase()
+  );
+  const subjectSegment = sanitizePathPart(
+    String(subject.code || subject.id || "subject").toLowerCase()
+  );
+  const studentSegment = sanitizePathPart(
+    String(user.rollNumber || user.name || user.id || "student").toLowerCase(),
+    "student"
+  );
+
+  return `${yearSegment}/${departmentSegment}/${sectionSegment}/${subjectSegment}/student/${studentSegment}_${Date.now()}-${safeName}`;
 }
 
-async function createPresentationUploadEntry({
+async function createPresentationUploadIntent({
   student,
   classId,
   subjectId,
   fileName,
-  fileType,
-  title,
-  description
+  fileType
 }) {
   const normalizedSubjectId = ensureObjectId(subjectId, "subjectId");
   const subject = await validateSubjectForStudentClass(normalizedSubjectId, classId);
+  const storageContext = await getClassStorageContext(classId);
 
-  const key = buildStudentUploadKey({ user: student, subject, fileName });
-  const uploadUrl = await createPresignedUploadUrl({
-    key,
-    contentType: fileType
-  });
-  const fileUrl = buildPublicFileUrl(key);
-
-  const result = await createUpload({
-    uploadedBy: student.id,
-    subjectId: normalizedSubjectId,
-    s3Key: key,
-    fileUrl,
-    status: "UPLOADED",
-    title: sanitizeText(title, 140),
-    description: sanitizeText(description, 1200),
-    fileName: sanitizeText(fileName, 240),
-    fileType: sanitizeText(fileType, 120),
-    category: "STUDENT_PRESENTATION"
-  });
-
+  const key = buildStudentUploadKey({ user: student, subject, fileName, storageContext });
   return {
     message: "Upload URL generated",
-    uploadId: result.insertId,
-    uploadUrl,
-    fileUrl,
-    officeViewerUrl: buildOfficeViewerUrl(fileUrl)
+    subjectId: normalizedSubjectId,
+    key,
+    fileName: sanitizeText(fileName, 240),
+    fileType: sanitizeText(fileType, 120)
   };
 }
 
@@ -325,23 +354,125 @@ const getStudentUploads = asyncHandler(async (req, res) => {
 });
 
 const requestUploadUrl = asyncHandler(async (req, res) => {
-  const { subjectId, fileName, fileType = "application/octet-stream", title = "", description = "" } = req.body;
+  const { subjectId, fileName, fileType = "application/octet-stream" } = req.body;
   if (!subjectId || !fileName) {
     throw new ApiError(400, "subjectId and fileName are required");
   }
 
   const { user, classId } = await ensureStudentAndClass(req.user.userId);
-  const payload = await createPresentationUploadEntry({
+  const intent = await createPresentationUploadIntent({
     student: user,
     classId,
     subjectId,
     fileName,
-    fileType,
-    title,
-    description
+    fileType
   });
 
-  res.status(201).json(payload);
+  const uploadToken = signUploadToken({
+    purpose: "student_presentation_upload",
+    userId: user.id,
+    subjectId: intent.subjectId,
+    key: intent.key,
+    fileName: intent.fileName,
+    fileType: intent.fileType
+  });
+
+  const origin = getRequestOrigin(req);
+  const uploadUrl = await buildUploadUrl({
+    origin,
+    key: intent.key,
+    contentType: intent.fileType,
+    uploadToken
+  });
+  const fileUrl = buildFileUrl({ origin, key: intent.key });
+
+  res.status(201).json({
+    message: intent.message,
+    uploadUrl,
+    fileUrl,
+    officeViewerUrl: buildOfficeViewerUrl(fileUrl),
+    uploadToken
+  });
+});
+
+const completeStudentPresentationUpload = asyncHandler(async (req, res) => {
+  const { uploadToken, title = "", description = "" } = req.body;
+  if (!uploadToken) throw new ApiError(400, "uploadToken is required");
+
+  let decoded;
+  try {
+    decoded = verifyUploadToken(String(uploadToken));
+  } catch (_error) {
+    throw new ApiError(400, "uploadToken is invalid or expired");
+  }
+
+  if (decoded.purpose !== "student_presentation_upload") {
+    throw new ApiError(400, "uploadToken is invalid");
+  }
+
+  if (String(decoded.userId || "") !== String(req.user.userId)) {
+    throw new ApiError(403, "Invalid upload token");
+  }
+
+  const { user, classId } = await ensureStudentAndClass(req.user.userId);
+
+  const normalizedSubjectId = ensureObjectId(decoded.subjectId, "subjectId");
+  await validateSubjectForStudentClass(normalizedSubjectId, classId);
+
+  const key = String(decoded.key || "").trim();
+  if (!key) throw new ApiError(400, "uploadToken is invalid");
+
+  let exists = false;
+  try {
+    exists = await doesUploadedFileExist({ key });
+  } catch (_error) {
+    throw new ApiError(500, "Failed to verify uploaded file in storage");
+  }
+
+  if (!exists) {
+    throw new ApiError(400, "Storage upload not found. Please retry uploading the file.");
+  }
+
+  const alreadyCompleted = await Upload.findOne({
+    uploadedBy: user.id,
+    s3Key: key,
+    category: "STUDENT_PRESENTATION"
+  })
+    .select("_id fileUrl")
+    .lean()
+    .exec();
+
+  const origin = getRequestOrigin(req);
+  const fileUrl = alreadyCompleted?.fileUrl || buildFileUrl({ origin, key });
+
+  if (alreadyCompleted?._id) {
+    return res.status(200).json({
+      message: "Upload already completed",
+      uploadId: String(alreadyCompleted._id),
+      fileUrl,
+      officeViewerUrl: buildOfficeViewerUrl(fileUrl)
+    });
+  }
+
+  const created = await createUpload({
+    uploadedBy: user.id,
+    subjectId: normalizedSubjectId,
+    s3Key: key,
+    fileUrl,
+    status: "UPLOADED",
+    title: sanitizeText(title, 140),
+    description: sanitizeText(description, 1200),
+    fileName: sanitizeText(decoded.fileName, 240),
+    fileType: sanitizeText(decoded.fileType, 120),
+    category: "STUDENT_PRESENTATION"
+  });
+
+  res.status(201).json({
+    message: "Upload completed successfully",
+    uploadId: created.insertId,
+    fileUrl,
+    officeViewerUrl: buildOfficeViewerUrl(fileUrl)
+  });
 });
 
 const updateStudentPresentation = asyncHandler(async (req, res) => {
@@ -401,32 +532,127 @@ const requestPresentationReplaceUploadUrl = asyncHandler(async (req, res) => {
     uploadedBy: user.id,
     category: "STUDENT_PRESENTATION"
   })
-    .populate({ path: "subjectId", select: "code" })
+    .populate({
+      path: "subjectId",
+      select: "code classId",
+      populate: {
+        path: "classId",
+        select: "year section departmentId",
+        populate: { path: "departmentId", select: "code" }
+      }
+    })
     .exec();
   if (!existing) throw new ApiError(404, "Presentation not found");
 
-  const safeName = sanitizeFileName(fileName);
   const subjectCode = existing.subjectId?.code || "subject";
-  const key = `${user.year || "year-unknown"}/${(user.branch || "branch-unknown").toLowerCase()}/${(user.section || "section-unknown").toLowerCase()}/${subjectCode.toLowerCase()}/student/${Date.now()}-${safeName}`;
-  const uploadUrl = await createPresignedUploadUrl({
-    key,
-    contentType: fileType
+  const storageContext = {
+    year: existing.subjectId?.classId?.year || user.year || null,
+    section: existing.subjectId?.classId?.section || user.section || null,
+    departmentCode:
+      existing.subjectId?.classId?.departmentId?.code || user.branch || null
+  };
+  const key = buildStudentUploadKey({
+    user,
+    subject: { code: subjectCode },
+    fileName,
+    storageContext
   });
-  const fileUrl = buildPublicFileUrl(key);
 
-  existing.s3Key = key;
-  existing.fileUrl = fileUrl;
-  existing.fileName = sanitizeText(fileName, 240);
-  existing.fileType = sanitizeText(fileType, 120);
-  existing.status = "UPLOADED";
-  existing.feedback = null;
-  existing.reviewedBy = null;
-  existing.reviewedAt = null;
-  await existing.save();
+  const sanitizedFileName = sanitizeText(fileName, 240);
+  const sanitizedFileType = sanitizeText(fileType, 120);
+  const uploadToken = signUploadToken({
+    purpose: "student_presentation_replace",
+    userId: user.id,
+    presentationId: String(existing._id),
+    key,
+    fileName: sanitizedFileName,
+    fileType: sanitizedFileType
+  });
+
+  const origin = getRequestOrigin(req);
+  const uploadUrl = await buildUploadUrl({
+    origin,
+    key,
+    contentType: sanitizedFileType || fileType,
+    uploadToken
+  });
+  const fileUrl = buildFileUrl({ origin, key });
 
   res.status(200).json({
     message: "Replacement upload URL generated",
     uploadUrl,
+    fileUrl,
+    officeViewerUrl: buildOfficeViewerUrl(fileUrl),
+    uploadToken
+  });
+});
+
+const completeStudentPresentationReplace = asyncHandler(async (req, res) => {
+  const { presentationId } = req.params;
+  const { uploadToken } = req.body;
+
+  if (!Types.ObjectId.isValid(presentationId)) {
+    throw new ApiError(400, "presentationId is invalid");
+  }
+  if (!uploadToken) throw new ApiError(400, "uploadToken is required");
+
+  let decoded;
+  try {
+    decoded = verifyUploadToken(String(uploadToken));
+  } catch (_error) {
+    throw new ApiError(400, "uploadToken is invalid or expired");
+  }
+
+  if (decoded.purpose !== "student_presentation_replace") {
+    throw new ApiError(400, "uploadToken is invalid");
+  }
+
+  if (String(decoded.userId || "") !== String(req.user.userId)) {
+    throw new ApiError(403, "Invalid upload token");
+  }
+
+  if (String(decoded.presentationId || "") !== String(presentationId)) {
+    throw new ApiError(400, "uploadToken does not match presentationId");
+  }
+
+  const { user } = await ensureStudentAndClass(req.user.userId);
+
+  const key = String(decoded.key || "").trim();
+  if (!key) throw new ApiError(400, "uploadToken is invalid");
+
+  let exists = false;
+  try {
+    exists = await doesUploadedFileExist({ key });
+  } catch (_error) {
+    throw new ApiError(500, "Failed to verify uploaded file in storage");
+  }
+
+  if (!exists) {
+    throw new ApiError(400, "Storage upload not found. Please retry uploading the file.");
+  }
+
+  const upload = await Upload.findOne({
+    _id: presentationId,
+    uploadedBy: user.id,
+    category: "STUDENT_PRESENTATION"
+  }).exec();
+  if (!upload) throw new ApiError(404, "Presentation not found");
+
+  const origin = getRequestOrigin(req);
+  const fileUrl = buildFileUrl({ origin, key });
+
+  upload.s3Key = key;
+  upload.fileUrl = fileUrl;
+  upload.fileName = sanitizeText(decoded.fileName, 240);
+  upload.fileType = sanitizeText(decoded.fileType, 120);
+  upload.status = "UPLOADED";
+  upload.feedback = null;
+  upload.reviewedBy = null;
+  upload.reviewedAt = null;
+  await upload.save();
+
+  res.status(200).json({
+    message: "Presentation file replaced successfully",
     fileUrl,
     officeViewerUrl: buildOfficeViewerUrl(fileUrl)
   });
@@ -623,6 +849,8 @@ const changeStudentPassword = asyncHandler(async (req, res) => {
 
 module.exports = {
   changeStudentPassword,
+  completeStudentPresentationReplace,
+  completeStudentPresentationUpload,
   deleteStudentPresentation,
   getStudentActivity,
   getStudentHome,

@@ -68,6 +68,14 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ role: 1 });
-userSchema.index({ rollNumber: 1 }, { unique: true, sparse: true });
+userSchema.index(
+  { rollNumber: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      rollNumber: { $exists: true, $type: "string" }
+    }
+  }
+);
 
 module.exports = mongoose.models.User || mongoose.model("User", userSchema);

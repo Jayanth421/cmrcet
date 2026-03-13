@@ -21,8 +21,21 @@ function getContentType(file) {
   return "application/octet-stream";
 }
 
+function getStorageUploadNetworkHint(uploadUrl) {
+  const url = String(uploadUrl || "");
+  const origin = typeof window !== "undefined" ? String(window.location.origin || "") : "";
+
+  if (/amazonaws\.com/i.test(url)) {
+    const originHint = origin ? `Add ${origin} to your S3 bucket CORS AllowedOrigins (and allow PUT).` : "";
+    return `Storage upload request was blocked (usually S3 CORS). ${originHint} Or set backend S3_UPLOAD_MODE=proxy to upload via the backend API.`;
+  }
+
+  return "Storage upload request failed to reach the server. Check backend URL and network connectivity.";
+}
+
 export default function StudentUploadPage() {
   const [subjects, setSubjects] = useState([]);
+  const [loadingSubjects, setLoadingSubjects] = useState(true);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -36,11 +49,15 @@ export default function StudentUploadPage() {
 
   useEffect(() => {
     async function loadSubjects() {
+      setLoadingSubjects(true);
+      setError("");
       try {
         const response = await api.get("/student/subjects");
         setSubjects(response.data.subjects || []);
       } catch (requestError) {
         setError(requestError?.response?.data?.message || "Failed to load subjects");
+      } finally {
+        setLoadingSubjects(false);
       }
     }
 
@@ -67,25 +84,43 @@ export default function StudentUploadPage() {
       return;
     }
 
+    if (subjects.length === 0) {
+      setError("No subjects assigned. Contact admin.");
+      return;
+    }
+
     setSubmitting(true);
     try {
       const fileType = getContentType(file);
+      const title = form.title.trim();
+      const description = form.description.trim();
 
       const presignResponse = await api.post("/student/presentations/presign", {
         subjectId: form.subjectId,
-        title: form.title.trim(),
-        description: form.description.trim(),
+        title,
+        description,
         fileName: file.name,
         fileType
       });
 
-      const uploadResponse = await fetch(presignResponse.data.uploadUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": fileType
-        },
-        body: file
-      });
+      const uploadUrl = presignResponse.data.uploadUrl;
+      const uploadToken = presignResponse.data.uploadToken;
+      if (!uploadUrl || !uploadToken) {
+        throw new Error("Upload URL could not be generated. Please try again.");
+      }
+
+      let uploadResponse;
+      try {
+        uploadResponse = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": fileType
+          },
+          body: file
+        });
+      } catch (_fetchError) {
+        throw new Error(getStorageUploadNetworkHint(uploadUrl));
+      }
 
       if (!uploadResponse.ok) {
         const errorText = await uploadResponse.text();
@@ -93,8 +128,14 @@ export default function StudentUploadPage() {
         throw new Error(reason ? `Storage upload failed: ${reason}` : "Failed to upload file to storage");
       }
 
+      const completeResponse = await api.post("/student/presentations/complete", {
+        uploadToken,
+        title,
+        description
+      });
+
       setResult({
-        ...presignResponse.data,
+        ...completeResponse.data,
         fileName: file.name
       });
       setForm({
@@ -122,9 +163,16 @@ export default function StudentUploadPage() {
         Upload PPT/PPTX/PDF with title, description, and subject mapping.
       </p>
 
-      <form className="mt-5 grid gap-3 md:grid-cols-2" onSubmit={handleSubmit}>
+      {error ? <p className="mt-4 text-sm text-red-300">{error}</p> : null}
+      {!loadingSubjects && !error && subjects.length === 0 ? (
+        <p className="mt-4 text-sm text-amber-200">
+          No subjects assigned to your account yet. Please contact admin.
+        </p>
+      ) : null}
+
+      <form className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2" onSubmit={handleSubmit}>
         <input
-          className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300 md:col-span-2"
+          className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300 md:col-span-2"
           placeholder="Presentation title"
           value={form.title}
           onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
@@ -132,7 +180,7 @@ export default function StudentUploadPage() {
         />
 
         <textarea
-          className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300 md:col-span-2"
+          className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300 md:col-span-2"
           rows={4}
           placeholder="Description"
           value={form.description}
@@ -140,12 +188,13 @@ export default function StudentUploadPage() {
         />
 
         <select
-          className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300"
+          className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none focus:border-brand-300"
           value={form.subjectId}
           onChange={(event) => setForm((prev) => ({ ...prev, subjectId: event.target.value }))}
+          disabled={loadingSubjects || subjects.length === 0}
           required
         >
-          <option value="">Select Subject</option>
+          <option value="">{loadingSubjects ? "Loading subjects..." : "Select Subject"}</option>
           {subjects.map((item) => (
             <option key={item.id} value={item.id}>
               {item.code} - {item.name}
@@ -155,23 +204,23 @@ export default function StudentUploadPage() {
 
         <input
           key={fileInputKey}
-          className="rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none file:mr-4 file:rounded-lg file:border-0 file:bg-white/20 file:px-3 file:py-1 file:text-white focus:border-brand-300"
+          className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white outline-none file:mr-4 file:rounded-lg file:border-0 file:bg-white/20 file:px-3 file:py-1 file:text-white focus:border-brand-300"
           type="file"
           accept=".ppt,.pptx,.pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/pdf"
           onChange={(event) => setFile(event.target.files?.[0] || null)}
+          disabled={loadingSubjects || subjects.length === 0}
           required
         />
 
         <button
-          className="rounded-xl bg-gradient-to-r from-violetBrand-500 to-brand-500 px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-70 md:col-span-2"
+          className="w-full rounded-xl bg-gradient-to-r from-violetBrand-500 to-brand-500 px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-70 md:col-span-2"
           type="submit"
-          disabled={submitting}
+          disabled={submitting || loadingSubjects || subjects.length === 0}
         >
           {submitting ? "Uploading..." : "Upload Presentation"}
         </button>
       </form>
 
-      {error ? <p className="mt-4 text-sm text-red-300">{error}</p> : null}
       {result ? (
         <div className="mt-4 rounded-xl border border-emerald-200/30 bg-emerald-200/10 p-4 text-xs">
           <p className="text-emerald-100">Upload completed successfully.</p>

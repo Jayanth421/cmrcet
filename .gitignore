@@ -9,6 +9,9 @@
 # Archives
 *.zip
 
+# Local file storage
+backend/uploads/
+
 # OS junk
 .DS_Store
 Thumbs.db
