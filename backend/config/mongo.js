@@ -14,6 +14,12 @@ function maskMongoUri(uri) {
   return `${value.slice(0, protocolIndex + 3)}***:***${value.slice(atIndex)}`;
 }
 
+function maskMongoUrisInText(text) {
+  if (!text) return "";
+  const value = String(text);
+  return value.replace(/(mongodb(?:\+srv)?:\/\/)([^@\s/]+)@/gi, "$1***:***@");
+}
+
 function getMongoCandidates() {
   const primaryUri = readEnv("MONGO_URI") || readEnv("MONGODB_URI");
   const fallbackUri = readEnv("MONGO_FALLBACK_URI");
@@ -85,7 +91,8 @@ async function connectMongo() {
         uri: candidate.uri
       };
     } catch (error) {
-      failures.push(`${candidate.label} [${maskMongoUri(candidate.uri)}] -> ${error.message}`);
+      const maskedErrorMessage = maskMongoUrisInText(error?.message);
+      failures.push(`${candidate.label} [${maskMongoUri(candidate.uri)}] -> ${maskedErrorMessage}`);
       try {
         if (mongoose.connection.readyState !== 0) {
           await mongoose.disconnect();
