@@ -4,11 +4,6 @@ function readEnv(name) {
   return String(process.env[name] || "").trim();
 }
 
-function isTruthy(value, defaultValue = false) {
-  if (!value) return defaultValue;
-  return !["0", "false", "no", "off"].includes(String(value).trim().toLowerCase());
-}
-
 function maskMongoUri(uri) {
   if (!uri) return "";
   const value = String(uri);
@@ -22,16 +17,10 @@ function maskMongoUri(uri) {
 function getMongoCandidates() {
   const primaryUri = readEnv("MONGO_URI") || readEnv("MONGODB_URI");
   const fallbackUri = readEnv("MONGO_FALLBACK_URI");
-  const localUri = readEnv("MONGO_LOCAL_URI") || "mongodb://127.0.0.1:27017/cmr_smart_portal";
-  const localFallbackEnabled = isTruthy(
-    readEnv("MONGO_LOCAL_FALLBACK"),
-    String(process.env.NODE_ENV || "development").trim().toLowerCase() !== "production"
-  );
 
   const candidates = [];
   if (primaryUri) candidates.push({ label: "primary", uri: primaryUri });
   if (fallbackUri) candidates.push({ label: "fallback", uri: fallbackUri });
-  if (localFallbackEnabled) candidates.push({ label: "local", uri: localUri });
 
   const seen = new Set();
   return candidates.filter((item) => {
@@ -80,7 +69,7 @@ async function connectMongo() {
   const timeoutMs = Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 10000);
 
   if (mongoCandidates.length === 0) {
-    throw new Error("MONGO_URI is required (or enable MONGO_LOCAL_FALLBACK for local MongoDB)");
+    throw new Error("MONGO_URI (or MONGODB_URI) is required");
   }
 
   const failures = [];
@@ -109,7 +98,7 @@ async function connectMongo() {
 
   const failureReason = failures.join(" | ");
   throw new Error(
-    `${failureReason}. If using Atlas, whitelist your current IP; otherwise use local MongoDB via MONGO_LOCAL_FALLBACK=true and MONGO_LOCAL_URI.`
+    `${failureReason}. If using MongoDB Atlas, ensure your deployment's outbound IP is allowed in Network Access.`
   );
 }
 
