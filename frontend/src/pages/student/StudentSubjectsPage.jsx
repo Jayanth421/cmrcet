@@ -107,14 +107,21 @@ export default function StudentSubjectsPage() {
                           {presentation.createdAt ? new Date(presentation.createdAt).toLocaleString() : "-"}
                         </td>
                         <td className="px-3 py-3">
-                          <a
-                            href={presentation.fileUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded-lg border border-green/100 bg-green-400/100 px-2 py-1 text-xs text-black hover:bg-green-400/100 disabled:opacity-70"
-                          >
-                            Open
-                          </a>
+                          <button
+                type="button"
+                className="w-full rounded-2xl border border-black/10 bg-green-500/100 px-4 py-3 text-center text-sm text-black hover:bg-black/10"
+                onClick={async () => {
+                  try {
+                    await viewRemoteFile(activeMenuItem.id);
+                  } catch (err) {
+                    setError(err?.response?.data?.message || err.message || 'Failed to view file');
+                  } finally {
+                    closeActionMenu();
+                  }
+                }}
+              >
+                View
+              </button>
                         </td>
                       </tr>
                     ))}
