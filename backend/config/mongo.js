@@ -144,10 +144,7 @@ async function connectMongo() {
       await mongoose.connect(candidate.uri, {
         serverSelectionTimeoutMS: timeoutMs,
         // Optional connect timeout (fallback to same as server selection timeout)
-        connectTimeoutMS: Number(process.env.MONGO_CONNECT_TIMEOUT_MS || timeoutMs),
-        // Modern parser/topology flags (harmless on recent mongoose versions)
-        useNewUrlParser: true,
-        useUnifiedTopology: true
+        connectTimeoutMS: Number(process.env.MONGO_CONNECT_TIMEOUT_MS || timeoutMs)
       });
       await ensureUserCollectionIndexes();
       console.log(`MongoDB connected to ${candidate.label} [${maskMongoUri(candidate.uri)}]`);
