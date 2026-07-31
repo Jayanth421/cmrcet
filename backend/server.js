@@ -33,28 +33,71 @@ function loadEnvFiles() {
   }
 }
 
+function readBooleanEnv(name, defaultValue = false) {
+  const raw = String(process.env[name] ?? "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return defaultValue;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return defaultValue;
+}
+
 loadEnvFiles();
 
 const { connectMongo } = require("./config/mongo");
+const { createApp } = require("./app");
 
 const PORT = Number(process.env.PORT || 5000);
 
 async function startServer() {
-  try {
-    const mongoConnection = await connectMongo();
-    if (mongoConnection?.source) {
-      console.log(`Mongo connected using ${mongoConnection.source} source`);
+  const isProduction = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+  const allowStartupWithoutDb = readBooleanEnv("ALLOW_STARTUP_WITHOUT_DB", !isProduction);
+  const skipDbConnect = readBooleanEnv("SKIP_DB_CONNECT", false);
+  const hasMongoConfig = Boolean(process.env.MONGO_URI || process.env.MONGODB_URI || process.env.MONGO_FALLBACK_URI);
+
+  let dbStatus = { status: "unknown" };
+
+  if (skipDbConnect) {
+    dbStatus = { status: "skipped" };
+    console.log("Database connection skipped via SKIP_DB_CONNECT=true");
+  } else if (!hasMongoConfig) {
+    dbStatus = { status: "not_configured", message: "No MongoDB URI configured" };
+    if (allowStartupWithoutDb) {
+      console.warn("No MongoDB URI configured; starting backend without a database connection.");
+    } else {
+      throw new Error("MONGO_URI (or MONGODB_URI) is required");
     }
-    // Require the Express app after DB connection so route modules (and any model imports)
-    // don't run database operations at module-load time before the driver is ready.
-    const app = require("./app");
-    app.listen(PORT, () => {
-      console.log(`CMR Smart Presentation backend running on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error("Failed to start server:", error.message);
-    process.exit(1);
+  } else {
+    try {
+      const mongoConnection = await connectMongo();
+      if (mongoConnection?.source) {
+        dbStatus = {
+          status: "connected",
+          source: mongoConnection.source
+        };
+        console.log(`Mongo connected using ${mongoConnection.source} source`);
+      }
+    } catch (error) {
+      dbStatus = {
+        status: "degraded",
+        message: error.message
+      };
+      if (allowStartupWithoutDb) {
+        console.warn(`MongoDB connection failed; starting backend in degraded mode: ${error.message}`);
+      } else {
+        throw error;
+      }
+    }
   }
+
+  const app = createApp({ dbStatus });
+  app.listen(PORT, () => {
+    console.log(`CMR Smart Presentation backend running on port ${PORT}`);
+  });
 }
 
-startServer();
+startServer().catch((error) => {
+  console.error("Failed to start server:", error.message);
+  process.exit(1);
+});
