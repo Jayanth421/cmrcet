@@ -27,86 +27,108 @@ function readBooleanEnv(name, defaultValue = false) {
   return defaultValue;
 }
 
-const app = express();
-const isProduction = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
-const strictDevCors =
-  String(process.env.STRICT_DEV_CORS || "")
-    .trim()
-    .toLowerCase() === "true";
+function createApp({ dbStatus = { status: "unknown" } } = {}) {
+  const app = express();
+  const isProduction = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+  const strictDevCors =
+    String(process.env.STRICT_DEV_CORS || "")
+      .trim()
+      .toLowerCase() === "true";
 
-const allowedOrigins = String(process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+  const allowedOrigins = String(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
-const corsOriginConfig =
-  !isProduction && !strictDevCors
-    ? true
-    : allowedOrigins.length > 0
-      ? allowedOrigins
-      : true;
+  const corsOriginConfig =
+    !isProduction && !strictDevCors
+      ? true
+      : allowedOrigins.length > 0
+        ? allowedOrigins
+        : true;
 
-app.set("trust proxy", 1);
-app.use(helmet());
-app.use(
-  cors({
-    origin: corsOriginConfig,
-    credentials: true
-  })
-);
-app.use(express.json({ limit: "4mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+  app.set("trust proxy", 1);
+  app.locals.dbStatus = dbStatus;
+  app.locals.startedAt = new Date().toISOString();
+  app.use(helmet());
+  app.use(
+    cors({
+      origin: corsOriginConfig,
+      credentials: true
+    })
+  );
+  app.use(express.json({ limit: "4mb" }));
+  app.use(express.urlencoded({ extended: true }));
+  app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
-app.use(
-  rateLimit({
-    windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
-    max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 200),
-    standardHeaders: true,
-    legacyHeaders: false
-  })
-);
+  app.use(
+    rateLimit({
+      windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+      max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 200),
+      standardHeaders: true,
+      legacyHeaders: false
+    })
+  );
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", service: "cmr-smart-presentation-backend" });
-});
-
-if (getStorageProvider() === "local") {
-  const uploadDir = getLocalUploadDir();
-  app.use("/files", express.static(uploadDir));
-}
-
-app.use("/api/auth", authRoutes);
-app.use("/api/student", studentRoutes);
-app.use("/api/faculty", facultyRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/storage", storageRoutes);
-app.use("/api/supabase", supabaseRoutes);
-
-const shouldServeFrontend = readBooleanEnv("SERVE_FRONTEND", isProduction);
-if (shouldServeFrontend) {
-  const frontendDistDir = path.resolve(__dirname, "..", "frontend", "dist");
-  const frontendIndex = path.join(frontendDistDir, "index.html");
-
-  if (fs.existsSync(frontendIndex)) {
-    app.use(express.static(frontendDistDir));
-
-    // SPA fallback: hand non-API routes to the React app.
-    app.get("*", (req, res, next) => {
-      if (
-        req.path === "/health" ||
-        req.path.startsWith("/api") ||
-        req.path.startsWith("/files")
-      ) {
-        return next();
-      }
-
-      return res.sendFile(frontendIndex);
+  app.get("/health", (req, res) => {
+    res.status(200).json({
+      status: "ok",
+      service: "cmr-smart-presentation-backend",
+      environment: isProduction ? "production" : "development",
+      database: req.app.locals.dbStatus,
+      uptimeSeconds: Math.floor((Date.now() - new Date(req.app.locals.startedAt).getTime()) / 1000),
+      timestamp: new Date().toISOString()
     });
+  });
+
+  app.get("/", (req, res) => {
+    res.json({
+      message: "CMR Smart Presentation backend API",
+      health: "/health"
+    });
+  });
+
+  if (getStorageProvider() === "local") {
+    const uploadDir = getLocalUploadDir();
+    app.use("/files", express.static(uploadDir));
   }
+
+  app.use("/api/auth", authRoutes);
+  app.use("/api/student", studentRoutes);
+  app.use("/api/faculty", facultyRoutes);
+  app.use("/api/admin", adminRoutes);
+  app.use("/api/storage", storageRoutes);
+  app.use("/api/supabase", supabaseRoutes);
+
+  const shouldServeFrontend = readBooleanEnv("SERVE_FRONTEND", isProduction);
+  if (shouldServeFrontend) {
+    const frontendDistDir = path.resolve(__dirname, "..", "frontend", "dist");
+    const frontendIndex = path.join(frontendDistDir, "index.html");
+
+    if (fs.existsSync(frontendIndex)) {
+      app.use(express.static(frontendDistDir));
+
+      // SPA fallback: hand non-API routes to the React app.
+      app.get("*", (req, res, next) => {
+        if (
+          req.path === "/health" ||
+          req.path.startsWith("/api") ||
+          req.path.startsWith("/files")
+        ) {
+          return next();
+        }
+
+        return res.sendFile(frontendIndex);
+      });
+    }
+  }
+
+  app.use(notFound);
+  app.use(errorHandler);
+
+  return app;
 }
 
-app.use(notFound);
-app.use(errorHandler);
-
-module.exports = app;
+module.exports = {
+  createApp
+};
